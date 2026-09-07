@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LanPaste",
+  "version": "0.1.0",
+  "identifier": "com.lanpaste.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1480",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "overlay",
+        "title": "LanPaste",
+        "url": "/?window=overlay",
+        "width": 780,
+        "height": 520,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "shadow": true,
+        "center": true
+      },
+      {
+        "label": "settings",
+        "title": "LanPaste 设置",
+        "url": "/?window=settings",
+        "width": 720,
+        "height": 560,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "pairing-show",
+        "title": "配对",
+        "url": "/?window=pairing-show",
+        "width": 360,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "center": true
+      },
+      {
+        "label": "pairing-input",
+        "title": "输入配对码",
+        "url": "/?window=pairing-input",
+        "width": 400,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "global-shortcut": {}
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

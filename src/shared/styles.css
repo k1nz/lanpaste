@@ -1,0 +1,176 @@
+:root {
+  --color-background: #0a0a0c;
+  --color-surface: rgba(28, 28, 30, 0.72);
+  --color-surface-solid: #1c1c1e;
+  --color-elevated: rgba(255, 255, 255, 0.06);
+  --color-foreground: #ededef;
+  --color-muted: #8a8f98;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-accent: #0a84ff;
+  --color-on-accent: #ffffff;
+  --color-destructive: #ff453a;
+  --color-ring: #0a84ff;
+  --color-success: #30d158;
+  --space-xs: 2px;
+  --space-sm: 4px;
+  --space-md: 8px;
+  --space-lg: 12px;
+  --space-xl: 16px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+  --blur: 20px;
+  --radius-window: 12px;
+  --radius-row: 6px;
+  --shadow-window: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --ease-overlay: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--color-foreground);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  color-scheme: dark;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button,
+[role="button"],
+[role="menuitem"],
+[role="option"],
+[role="switch"],
+select,
+summary,
+.lp-clickable {
+  cursor: pointer;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 160ms ease;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-foreground);
+  border: 1px solid var(--color-border);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: opacity 160ms ease;
+}
+
+.btn-ghost:hover {
+  opacity: 0.9;
+}
+
+.btn-ghost:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-destructive {
+  color: var(--color-destructive);
+}
+
+.glass-surface {
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-window);
+  box-shadow: var(--shadow-window);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.live-error {
+  color: var(--color-destructive);
+  font-size: 11px;
+}
+
+.progress-track {
+  height: 3px;
+  border-radius: 99px;
+  background: var(--color-elevated);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+}
