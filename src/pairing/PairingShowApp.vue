@@ -51,7 +51,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="pair-shell">
+  <div class="pair-shell glass-surface">
     <p class="label">{{ t("pairing.show.title") }}</p>
     <p v-if="payload" class="token" :class="{ expired }">{{ payload.token }}</p>
     <p v-else class="waiting">{{ t("pairing.waiting") }}</p>
@@ -71,12 +71,6 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: var(--space-md);
-  background: var(--color-surface);
-  backdrop-filter: blur(var(--blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-window);
-  box-shadow: var(--shadow-window);
   user-select: none;
 }
 

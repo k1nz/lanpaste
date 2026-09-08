@@ -373,7 +373,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="overlay-shell" :class="{ 'is-shown': shown }">
+  <div class="overlay-frame glass-surface">
+    <div class="overlay-shell" :class="{ 'is-shown': shown }">
     <header class="search-bar">
       <PhMagnifyingGlass class="search-icon" :size="16" weight="regular" />
       <input
@@ -427,10 +428,17 @@ onUnmounted(() => {
       @update:submenu-open="submenuOpen = $event"
       @update:submenu-index="submenuIndex = $event"
     />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.overlay-frame {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 .overlay-shell {
   position: relative;
   width: 100%;
@@ -438,12 +446,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--color-surface);
-  backdrop-filter: blur(var(--blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-window);
-  box-shadow: var(--shadow-window);
   opacity: 0;
   transform: translateY(6px);
   transition:

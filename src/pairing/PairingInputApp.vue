@@ -53,7 +53,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="pair-shell">
+  <div class="pair-shell glass-surface">
     <p class="label">{{ t("pairing.input.title") }}</p>
     <p class="hint">
       {{ payload ? t("pairing.input.hint", { name: payload.deviceName }) : t("pairing.waiting") }}
@@ -97,12 +97,6 @@ onUnmounted(() => {
   justify-content: center;
   gap: var(--space-md);
   padding: var(--space-xl);
-  background: var(--color-surface);
-  backdrop-filter: blur(var(--blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-window);
-  box-shadow: var(--shadow-window);
 }
 
 .label {

@@ -11,6 +11,9 @@ use crate::device::NearbyInfo;
 use crate::store::Store;
 use crate::types::{AppSettings, PairingInputPayload, PairingShowPayload};
 
+const GLASS_WINDOWS: &[&str] = &["overlay", "pairing-show", "pairing-input"];
+const GLASS_RADIUS: f64 = 12.0;
+
 #[derive(Clone)]
 pub struct AppState {
     pub inner: Arc<Inner>,
@@ -91,6 +94,28 @@ pub fn show_window(app: &AppHandle, label: &str) -> Result<(), String> {
     let w = app
         .get_webview_window(label)
         .ok_or_else(|| format!("window {label} missing"))?;
+    #[cfg(target_os = "macos")]
+    if GLASS_WINDOWS.contains(&w.label()) {
+        let window = w.clone();
+        window
+            .run_on_main_thread({
+                let window = window.clone();
+                move || {
+                    let _ = window.set_theme(Some(tauri::Theme::Dark));
+                    let _ = window_vibrancy::clear_vibrancy(&window);
+                    let _ = window_vibrancy::apply_vibrancy(
+                        &window,
+                        window_vibrancy::NSVisualEffectMaterial::HudWindow,
+                        Some(window_vibrancy::NSVisualEffectState::Active),
+                        Some(GLASS_RADIUS),
+                    );
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
     Ok(())

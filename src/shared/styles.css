@@ -1,6 +1,6 @@
 :root {
   --color-background: #0a0a0c;
-  --color-surface: rgba(28, 28, 30, 0.72);
+  --color-surface: rgba(28, 28, 30, 0.42);
   --color-surface-solid: #1c1c1e;
   --color-elevated: rgba(255, 255, 255, 0.06);
   --color-foreground: #ededef;
@@ -132,11 +132,10 @@ textarea {
 
 .glass-surface {
   background: var(--color-surface);
-  backdrop-filter: blur(var(--blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-window);
   box-shadow: var(--shadow-window);
+  overflow: hidden;
 }
 
 .sr-only {

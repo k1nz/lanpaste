@@ -165,17 +165,15 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
 }
 
 .group-label {
-  position: sticky;
-  top: 0;
   z-index: 1;
   height: 22px;
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  margin: 0 -8px;
+  padding: 0 16px;
   font-size: 11px;
   color: var(--color-muted);
-  background: rgba(28, 28, 30, 0.88);
-  backdrop-filter: blur(8px);
+  background-color: transparent;
 }
 
 .virtual-body {

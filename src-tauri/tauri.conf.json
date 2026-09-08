@@ -25,7 +25,13 @@
         "visible": false,
         "skipTaskbar": true,
         "shadow": true,
-        "center": true
+        "center": true,
+        "theme": "dark",
+        "windowEffects": {
+          "effects": ["hudWindow"],
+          "state": "active",
+          "radius": 12
+        }
       },
       {
         "label": "settings",
@@ -47,7 +53,13 @@
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
-        "center": true
+        "center": true,
+        "theme": "dark",
+        "windowEffects": {
+          "effects": ["hudWindow"],
+          "state": "active",
+          "radius": 12
+        }
       },
       {
         "label": "pairing-input",
@@ -60,7 +72,13 @@
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
-        "center": true
+        "center": true,
+        "theme": "dark",
+        "windowEffects": {
+          "effects": ["hudWindow"],
+          "state": "active",
+          "radius": 12
+        }
       }
     ],
     "security": {
