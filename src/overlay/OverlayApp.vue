@@ -227,6 +227,7 @@ function onContext(payload: { id: string; x: number; y: number }) {
 }
 
 function onKey(ev: KeyboardEvent) {
+  if (ev.isComposing) return;
   const meta = ev.metaKey || ev.ctrlKey;
   if (meta && ev.key.toLowerCase() === "k") {
     ev.preventDefault();
@@ -289,7 +290,7 @@ function onKey(ev: KeyboardEvent) {
       submenuOpen.value = false;
       return;
     }
-    if (ev.key === "Enter") {
+    if (ev.key === "Enter" || ev.key === "NumpadEnter") {
       ev.preventDefault();
       if (submenuOpen.value) {
         const dev = devices.value[submenuIndex.value];
@@ -318,7 +319,7 @@ function onKey(ev: KeyboardEvent) {
     moveSelection(-1);
     return;
   }
-  if (ev.key === "Enter") {
+  if (ev.key === "Enter" || ev.key === "NumpadEnter") {
     ev.preventDefault();
     void doPaste();
   }
@@ -381,10 +382,11 @@ onUnmounted(() => {
         ref="searchEl"
         v-model="query"
         class="search-input"
-        type="search"
+        type="text"
         :placeholder="t('overlay.searchPlaceholder')"
         autocomplete="off"
         spellcheck="false"
+        @keydown.enter.prevent
       />
       <TypeFilter v-model="typeFilter" v-model:open="filterOpen" />
     </header>

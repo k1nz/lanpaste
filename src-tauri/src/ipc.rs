@@ -44,13 +44,25 @@ pub async fn paste_entry(app: AppHandle, state: State<'_, AppState>, id: String)
         .ok()
         .and_then(|g| g.clone())
         .filter(|n| !n.is_empty());
-    let _ = state::hide_window(&app, "overlay");
-    if let Some(name) = target {
-        let _ = clipboard::activate_app_named(&name);
+    #[cfg(target_os = "windows")]
+    {
+        // Restore the previous window while we still own foreground, then hide.
+        let _ = clipboard::activate_app_named(target.as_deref().unwrap_or(""));
+        let _ = state::hide_window(&app, "overlay");
         std::thread::sleep(std::time::Duration::from_millis(80));
+        clipboard::simulate_paste()?;
+        return Ok(());
     }
-    clipboard::simulate_paste()?;
-    Ok(())
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state::hide_window(&app, "overlay");
+        if let Some(name) = target {
+            let _ = clipboard::activate_app_named(&name);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        clipboard::simulate_paste()?;
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -264,7 +276,7 @@ pub fn frontmost_app_name() -> Result<String, String> {
 }
 
 pub fn show_overlay_window(app: &AppHandle, state: Option<&AppState>) -> Result<(), String> {
-    if let Ok(name) = clipboard::frontmost_app_name() {
+    if let Ok(name) = clipboard::remember_frontmost() {
         if let Some(state) = state {
             if let Ok(mut g) = state.inner.last_frontmost.lock() {
                 *g = Some(name);

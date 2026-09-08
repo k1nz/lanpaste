@@ -310,12 +310,27 @@ pub fn payload_from_store(store: &Store, pasteboard_id: &str) -> Result<WritePay
     Ok(payload)
 }
 
+pub fn remember_frontmost() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        win32::remember_frontmost()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        frontmost_app_name()
+    }
+}
+
 pub fn frontmost_app_name() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         macos::frontmost_app_name()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32::frontmost_app_name()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(String::new())
     }
@@ -326,7 +341,11 @@ pub fn pasteboard_change_count() -> Result<i64, String> {
     {
         macos::change_count()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32::change_count()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(0)
     }
@@ -337,7 +356,11 @@ pub fn read_native() -> Result<Option<CapturedPasteboard>, String> {
     {
         macos::read()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32::read()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(None)
     }
@@ -348,7 +371,11 @@ pub fn write_native(payload: &WritePayload) -> Result<i64, String> {
     {
         macos::write(payload)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32::write(payload)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = payload;
         Ok(0)
@@ -360,7 +387,11 @@ pub fn simulate_paste() -> Result<(), String> {
     {
         macos::simulate_cmd_v()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32::simulate_ctrl_v()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(())
     }
@@ -371,7 +402,12 @@ pub fn activate_app_named(name: &str) -> Result<(), String> {
     {
         macos::activate_app(name)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = name;
+        win32::activate_remembered()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = name;
         Ok(())
@@ -615,6 +651,568 @@ mod macos {
         up.set_flags(CGEventFlags::CGEventFlagCommand);
         up.post(CGEventTapLocation::HID);
         Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod win32 {
+    use super::*;
+    use std::ffi::c_void;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use windows::core::{w, PWSTR};
+    use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+        IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
+    use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
+    use windows::Win32::System::Threading::{
+        AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
+        QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_MENU,
+        VK_V,
+    };
+    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    struct PrevTarget {
+        hwnd: isize,
+        name: String,
+    }
+
+    static PREV: Mutex<PrevTarget> = Mutex::new(PrevTarget {
+        hwnd: 0,
+        name: String::new(),
+    });
+
+    fn prev_lock() -> std::sync::MutexGuard<'static, PrevTarget> {
+        PREV.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn hwnd_from_isize(v: isize) -> HWND {
+        HWND(v as *mut c_void)
+    }
+
+    fn hwnd_as_isize(hwnd: HWND) -> isize {
+        hwnd.0 as isize
+    }
+
+    fn hwnd_null(hwnd: HWND) -> bool {
+        hwnd.0.is_null()
+    }
+
+    fn empty_item() -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::Text,
+            text: None,
+            html: None,
+            rtf: None,
+            url: None,
+            color: None,
+            image: None,
+            file_path: None,
+        }
+    }
+
+    fn window_title(hwnd: HWND) -> String {
+        unsafe {
+            let mut buf = [0u16; 512];
+            let n = GetWindowTextW(hwnd, &mut buf);
+            if n <= 0 {
+                return String::new();
+            }
+            String::from_utf16_lossy(&buf[..n as usize])
+        }
+    }
+
+    fn is_own_process(hwnd: HWND) -> bool {
+        unsafe {
+            if hwnd_null(hwnd) {
+                return false;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+            pid != 0 && pid == GetCurrentProcessId()
+        }
+    }
+
+    fn process_name(hwnd: HWND) -> String {
+        unsafe {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+            if pid != 0 {
+                if let Ok(proc) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                    let mut buf = [0u16; 512];
+                    let mut size = buf.len() as u32;
+                    let ok = QueryFullProcessImageNameW(
+                        proc,
+                        PROCESS_NAME_WIN32,
+                        PWSTR(buf.as_mut_ptr()),
+                        &mut size,
+                    )
+                    .is_ok();
+                    let _ = CloseHandle(proc);
+                    if ok && size > 0 {
+                        let path = String::from_utf16_lossy(&buf[..size as usize]);
+                        if let Some(stem) = Path::new(&path).file_stem() {
+                            let name = stem.to_string_lossy().into_owned();
+                            if !name.is_empty() {
+                                return name;
+                            }
+                        }
+                    }
+                }
+            }
+            window_title(hwnd)
+        }
+    }
+
+    pub fn remember_frontmost() -> Result<String, String> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd_null(hwnd) || is_own_process(hwnd) {
+            return Ok(prev_lock().name.clone());
+        }
+        let name = process_name(hwnd);
+        let mut g = prev_lock();
+        g.hwnd = hwnd_as_isize(hwnd);
+        g.name = name.clone();
+        Ok(name)
+    }
+
+    pub fn frontmost_app_name() -> Result<String, String> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if is_own_process(hwnd) {
+            return Ok(prev_lock().name.clone());
+        }
+        Ok(process_name(hwnd))
+    }
+
+    pub fn change_count() -> Result<i64, String> {
+        Ok(unsafe { GetClipboardSequenceNumber() as i64 })
+    }
+
+    fn force_foreground(hwnd: HWND) {
+        unsafe {
+            if hwnd_null(hwnd) || !IsWindow(Some(hwnd)).as_bool() {
+                return;
+            }
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+
+            // Pressing Alt briefly lets this process call SetForegroundWindow.
+            let _ = send_keys(&[(VK_MENU, false, false), (VK_MENU, true, false)]);
+
+            let fg = GetForegroundWindow();
+            let current_tid = GetCurrentThreadId();
+            let mut fg_tid = 0u32;
+            if !hwnd_null(fg) {
+                fg_tid = GetWindowThreadProcessId(fg, None);
+            }
+            let target_tid = GetWindowThreadProcessId(hwnd, None);
+
+            let attached_fg = fg_tid != 0
+                && fg_tid != current_tid
+                && AttachThreadInput(current_tid, fg_tid, true).as_bool();
+            let attached_target = target_tid != 0
+                && target_tid != current_tid
+                && target_tid != fg_tid
+                && AttachThreadInput(current_tid, target_tid, true).as_bool();
+
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+
+            if attached_target {
+                let _ = AttachThreadInput(current_tid, target_tid, false);
+            }
+            if attached_fg {
+                let _ = AttachThreadInput(current_tid, fg_tid, false);
+            }
+        }
+    }
+
+    pub fn activate_remembered() -> Result<(), String> {
+        let hwnd_val = prev_lock().hwnd;
+        if hwnd_val == 0 {
+            return Ok(());
+        }
+        force_foreground(hwnd_from_isize(hwnd_val));
+        Ok(())
+    }
+
+    fn key_input(vk: VIRTUAL_KEY, up: bool, extended: bool) -> INPUT {
+        let mut flags = if up {
+            KEYEVENTF_KEYUP
+        } else {
+            KEYBD_EVENT_FLAGS(0)
+        };
+        if extended {
+            flags |= KEYEVENTF_EXTENDEDKEY;
+        }
+        let scan = unsafe { MapVirtualKeyW(u32::from(vk.0), MAPVK_VK_TO_VSC) } as u16;
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn send_keys(keys: &[(VIRTUAL_KEY, bool, bool)]) -> Result<(), String> {
+        let inputs: Vec<INPUT> = keys
+            .iter()
+            .map(|(vk, up, ext)| key_input(*vk, *up, *ext))
+            .collect();
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent as usize != inputs.len() {
+            return Err("无法发送按键".into());
+        }
+        Ok(())
+    }
+
+    pub fn simulate_ctrl_v() -> Result<(), String> {
+        send_keys(&[
+            (VK_CONTROL, false, false),
+            (VK_V, false, false),
+            (VK_V, true, false),
+            (VK_CONTROL, true, false),
+        ])
+    }
+
+    fn with_clipboard<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        unsafe {
+            let mut opened = false;
+            for _ in 0..8 {
+                if OpenClipboard(None).is_ok() {
+                    opened = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !opened {
+                return Err("无法打开剪贴板".into());
+            }
+            let result = f();
+            let _ = CloseClipboard();
+            result
+        }
+    }
+
+    unsafe fn alloc_bytes(bytes: &[u8]) -> Result<HANDLE, String> {
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|e| e.to_string())?;
+        let ptr = GlobalLock(h);
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(h));
+            return Err("GlobalLock 失败".into());
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        let _ = GlobalUnlock(h);
+        Ok(HANDLE(h.0))
+    }
+
+    unsafe fn set_clipboard_bytes(format: u32, bytes: &[u8]) -> Result<(), String> {
+        let handle = alloc_bytes(bytes)?;
+        match SetClipboardData(format, Some(handle)) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = GlobalFree(Some(HGLOBAL(handle.0)));
+                Err(e.to_string())
+            }
+        }
+    }
+
+    fn utf16_bytes_nul(s: &str) -> Vec<u8> {
+        let mut wide: Vec<u16> = s.encode_utf16().collect();
+        wide.push(0);
+        let mut bytes = Vec::with_capacity(wide.len() * 2);
+        for u in wide {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn html_clipboard_payload(html: &str) -> Vec<u8> {
+        let start_frag = "<!--StartFragment-->";
+        let end_frag = "<!--EndFragment-->";
+        let body = format!("<html>\r\n<body>\r\n{start_frag}{html}{end_frag}\r\n</body>\r\n</html>");
+        let dummy = format!(
+            "Version:0.9\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n",
+            0, 0, 0, 0
+        );
+        let start_html = dummy.len();
+        let start_fragment = start_html + body.find(start_frag).unwrap_or(0) + start_frag.len();
+        let end_fragment = start_html + body.find(end_frag).unwrap_or(body.len());
+        let end_html = start_html + body.len();
+        let header = format!(
+            "Version:0.9\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n",
+            start_html, end_html, start_fragment, end_fragment
+        );
+        let mut out = header.into_bytes();
+        out.extend_from_slice(body.as_bytes());
+        out.push(0);
+        out
+    }
+
+    fn hdrop_bytes(paths: &[PathBuf]) -> Vec<u8> {
+        use std::os::windows::ffi::OsStrExt;
+        let mut files: Vec<u16> = Vec::new();
+        for p in paths {
+            files.extend(p.as_os_str().encode_wide());
+            files.push(0);
+        }
+        files.push(0);
+        let header_size = 20u32; // DROPFILES: u32 + POINT(8) + BOOL + BOOL
+        let mut bytes = vec![0u8; header_size as usize + files.len() * 2];
+        bytes[0..4].copy_from_slice(&header_size.to_le_bytes());
+        // fWide = TRUE at offset 16
+        bytes[16..20].copy_from_slice(&1u32.to_le_bytes());
+        let mut off = header_size as usize;
+        for u in files {
+            bytes[off..off + 2].copy_from_slice(&u.to_le_bytes());
+            off += 2;
+        }
+        bytes
+    }
+
+    pub fn write(payload: &WritePayload) -> Result<i64, String> {
+        with_clipboard(|| unsafe {
+            EmptyClipboard().map_err(|e| e.to_string())?;
+            if !payload.file_paths.is_empty() {
+                set_clipboard_bytes(u32::from(CF_HDROP.0), &hdrop_bytes(&payload.file_paths))?;
+            }
+            if let Some(png) = &payload.image_png {
+                let fmt = RegisterClipboardFormatW(w!("PNG"));
+                if fmt != 0 {
+                    set_clipboard_bytes(fmt, png)?;
+                }
+            }
+            if let Some(html) = &payload.html {
+                let fmt = RegisterClipboardFormatW(w!("HTML Format"));
+                if fmt != 0 {
+                    set_clipboard_bytes(fmt, &html_clipboard_payload(html))?;
+                }
+            }
+            if let Some(rtf) = &payload.rtf {
+                let fmt = RegisterClipboardFormatW(w!("Rich Text Format"));
+                if fmt != 0 {
+                    set_clipboard_bytes(fmt, rtf)?;
+                }
+            }
+            let text = payload
+                .text
+                .clone()
+                .or_else(|| payload.url.clone());
+            if let Some(text) = text {
+                set_clipboard_bytes(u32::from(CF_UNICODETEXT.0), &utf16_bytes_nul(&text))?;
+            }
+            Ok(GetClipboardSequenceNumber() as i64)
+        })
+    }
+
+    unsafe fn handle_bytes(handle: HANDLE) -> Option<Vec<u8>> {
+        if handle.0.is_null() {
+            return None;
+        }
+        let hg = HGLOBAL(handle.0);
+        let size = GlobalSize(hg);
+        if size == 0 {
+            return None;
+        }
+        let ptr = GlobalLock(hg);
+        if ptr.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
+        let _ = GlobalUnlock(hg);
+        Some(bytes)
+    }
+
+    fn bytes_to_utf16_string(bytes: &[u8]) -> String {
+        let n = bytes.len() / 2;
+        let mut wide = Vec::with_capacity(n);
+        let mut i = 0;
+        while i + 1 < bytes.len() {
+            let u = u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+            if u == 0 {
+                break;
+            }
+            wide.push(u);
+            i += 2;
+        }
+        String::from_utf16_lossy(&wide)
+    }
+
+    fn parse_html_format(bytes: &[u8]) -> Option<String> {
+        let s = std::str::from_utf8(bytes).ok().or_else(|| {
+            let c0 = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            std::str::from_utf8(&bytes[..c0]).ok()
+        })?;
+        if let (Some(a), Some(b)) = (s.find("<!--StartFragment-->"), s.find("<!--EndFragment-->"))
+        {
+            let start = a + "<!--StartFragment-->".len();
+            if start <= b {
+                return Some(s[start..b].to_string());
+            }
+        }
+        s.find("<html")
+            .or_else(|| s.find("<HTML"))
+            .map(|i| s[i..].trim_end_matches('\0').to_string())
+    }
+
+    fn looks_like_url(s: &str) -> bool {
+        let t = s.trim();
+        t.starts_with("http://") || t.starts_with("https://")
+    }
+
+    fn read_hdrop() -> Vec<PathBuf> {
+        unsafe {
+            let Ok(handle) = GetClipboardData(u32::from(CF_HDROP.0)) else {
+                return Vec::new();
+            };
+            if handle.0.is_null() {
+                return Vec::new();
+            }
+            let hdrop = HDROP(handle.0);
+            let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, None);
+            let mut paths = Vec::new();
+            for i in 0..count {
+                let mut needed = DragQueryFileW(hdrop, i, None) as usize;
+                if needed == 0 {
+                    continue;
+                }
+                needed += 1;
+                let mut buf = vec![0u16; needed];
+                let n = DragQueryFileW(hdrop, i, Some(&mut buf));
+                if n > 0 {
+                    let path = String::from_utf16_lossy(&buf[..n as usize]);
+                    if !path.is_empty() {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+            }
+            paths
+        }
+    }
+
+    pub fn read() -> Result<Option<CapturedPasteboard>, String> {
+        with_clipboard(|| {
+            let mut items: Vec<CapturedItem> = Vec::new();
+            unsafe {
+                if IsClipboardFormatAvailable(u32::from(CF_HDROP.0)).is_ok() {
+                    for path in read_hdrop() {
+                        if path.exists() {
+                            items.push(CapturedItem {
+                                ty: PasteType::File,
+                                file_path: Some(path),
+                                ..empty_item()
+                            });
+                        }
+                    }
+                }
+
+                let png_fmt = RegisterClipboardFormatW(w!("PNG"));
+                if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
+                    if let Ok(handle) = GetClipboardData(png_fmt) {
+                        if let Some(bytes) = handle_bytes(handle) {
+                            if !bytes.is_empty() {
+                                items.push(CapturedItem {
+                                    ty: PasteType::Image,
+                                    image: Some(bytes),
+                                    ..empty_item()
+                                });
+                            }
+                        }
+                    }
+                }
+
+                let html_fmt = RegisterClipboardFormatW(w!("HTML Format"));
+                if html_fmt != 0 && IsClipboardFormatAvailable(html_fmt).is_ok() {
+                    if let Ok(handle) = GetClipboardData(html_fmt) {
+                        if let Some(bytes) = handle_bytes(handle) {
+                            if let Some(html) = parse_html_format(&bytes) {
+                                if !html.is_empty() {
+                                    items.push(CapturedItem {
+                                        ty: PasteType::Html,
+                                        html: Some(html),
+                                        ..empty_item()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let rtf_fmt = RegisterClipboardFormatW(w!("Rich Text Format"));
+                if rtf_fmt != 0 && IsClipboardFormatAvailable(rtf_fmt).is_ok() {
+                    if let Ok(handle) = GetClipboardData(rtf_fmt) {
+                        if let Some(bytes) = handle_bytes(handle) {
+                            if !bytes.is_empty() {
+                                items.push(CapturedItem {
+                                    ty: PasteType::Rtf,
+                                    rtf: Some(bytes),
+                                    ..empty_item()
+                                });
+                            }
+                        }
+                    }
+                }
+
+                if IsClipboardFormatAvailable(u32::from(CF_UNICODETEXT.0)).is_ok() {
+                    if let Ok(handle) = GetClipboardData(u32::from(CF_UNICODETEXT.0)) {
+                        if let Some(bytes) = handle_bytes(handle) {
+                            let text = bytes_to_utf16_string(&bytes);
+                            if !text.is_empty() {
+                                if looks_like_url(&text)
+                                    && items.iter().all(|i| i.ty != PasteType::Url)
+                                {
+                                    items.push(CapturedItem {
+                                        ty: PasteType::Url,
+                                        url: Some(text.trim().to_string()),
+                                        ..empty_item()
+                                    });
+                                }
+                                if let Some(color) = parse_color(&text) {
+                                    items.push(CapturedItem {
+                                        ty: PasteType::Color,
+                                        color: Some(color.clone()),
+                                        text: Some(color),
+                                        ..empty_item()
+                                    });
+                                }
+                                items.push(CapturedItem {
+                                    ty: PasteType::Text,
+                                    text: Some(text),
+                                    ..empty_item()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if items.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(CapturedPasteboard { items }))
+            }
+        })
     }
 }
 
