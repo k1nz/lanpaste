@@ -26,7 +26,7 @@
         "skipTaskbar": true,
         "shadow": true,
         "center": true,
-        "theme": "dark",
+        "theme": "Dark",
         "windowEffects": {
           "effects": ["hudWindow"],
           "state": "active",
@@ -54,7 +54,7 @@
         "visible": false,
         "skipTaskbar": true,
         "center": true,
-        "theme": "dark",
+        "theme": "Dark",
         "windowEffects": {
           "effects": ["hudWindow"],
           "state": "active",
@@ -73,7 +73,7 @@
         "visible": false,
         "skipTaskbar": true,
         "center": true,
-        "theme": "dark",
+        "theme": "Dark",
         "windowEffects": {
           "effects": ["hudWindow"],
           "state": "active",
