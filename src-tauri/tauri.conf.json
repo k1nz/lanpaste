@@ -27,10 +27,12 @@
         "shadow": true,
         "center": true,
         "theme": "Dark",
+        "backgroundColor": [0, 0, 0, 0],
         "windowEffects": {
-          "effects": ["hudWindow"],
+          "effects": ["hudWindow", "acrylic", "blur"],
           "state": "active",
-          "radius": 12
+          "radius": 12,
+          "color": [28, 28, 30, 160]
         }
       },
       {
@@ -55,10 +57,12 @@
         "skipTaskbar": true,
         "center": true,
         "theme": "Dark",
+        "backgroundColor": [0, 0, 0, 0],
         "windowEffects": {
-          "effects": ["hudWindow"],
+          "effects": ["hudWindow", "acrylic", "blur"],
           "state": "active",
-          "radius": 12
+          "radius": 12,
+          "color": [28, 28, 30, 160]
         }
       },
       {
@@ -74,10 +78,12 @@
         "skipTaskbar": true,
         "center": true,
         "theme": "Dark",
+        "backgroundColor": [0, 0, 0, 0],
         "windowEffects": {
-          "effects": ["hudWindow"],
+          "effects": ["hudWindow", "acrylic", "blur"],
           "state": "active",
-          "radius": 12
+          "radius": 12,
+          "color": [28, 28, 30, 160]
         }
       }
     ],

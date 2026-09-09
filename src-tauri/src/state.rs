@@ -11,8 +11,12 @@ use crate::device::NearbyInfo;
 use crate::store::Store;
 use crate::types::{AppSettings, PairingInputPayload, PairingShowPayload};
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const GLASS_WINDOWS: &[&str] = &["overlay", "pairing-show", "pairing-input"];
+#[cfg(target_os = "macos")]
 const GLASS_RADIUS: f64 = 12.0;
+#[cfg(target_os = "windows")]
+const GLASS_TINT: (u8, u8, u8, u8) = (28, 28, 30, 160);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -94,22 +98,18 @@ pub fn show_window(app: &AppHandle, label: &str) -> Result<(), String> {
     let w = app
         .get_webview_window(label)
         .ok_or_else(|| format!("window {label} missing"))?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if GLASS_WINDOWS.contains(&w.label()) {
         let window = w.clone();
         window
             .run_on_main_thread({
                 let window = window.clone();
                 move || {
-                    let _ = window.set_theme(Some(tauri::Theme::Dark));
-                    let _ = window_vibrancy::clear_vibrancy(&window);
-                    let _ = window_vibrancy::apply_vibrancy(
-                        &window,
-                        window_vibrancy::NSVisualEffectMaterial::HudWindow,
-                        Some(window_vibrancy::NSVisualEffectState::Active),
-                        Some(GLASS_RADIUS),
-                    );
+                    apply_glass_effect(&window);
                     let _ = window.show();
+                    // DWM/SWCA acrylic often only composites after the HWND is visible.
+                    #[cfg(target_os = "windows")]
+                    apply_glass_effect(&window);
                     let _ = window.set_focus();
                 }
             })
@@ -119,6 +119,28 @@ pub fn show_window(app: &AppHandle, label: &str) -> Result<(), String> {
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn apply_glass_effect(window: &tauri::WebviewWindow) {
+    let _ = window.set_theme(Some(tauri::Theme::Dark));
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window_vibrancy::clear_vibrancy(window);
+        let _ = window_vibrancy::apply_vibrancy(
+            window,
+            window_vibrancy::NSVisualEffectMaterial::HudWindow,
+            Some(window_vibrancy::NSVisualEffectState::Active),
+            Some(GLASS_RADIUS),
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+        let tint = Some(GLASS_TINT);
+        let _ = window_vibrancy::apply_acrylic(window, tint);
+        let _ = window_vibrancy::apply_blur(window, tint);
+    }
 }
 
 pub fn hide_window(app: &AppHandle, label: &str) -> Result<(), String> {
