@@ -724,7 +724,7 @@ impl Store {
             }
         }
         if let Some(v) = self.get_setting("overlayShortcut")? {
-            if !v.is_empty() {
+            if !v.is_empty() && v != "CommandOrControl+Shift+V" {
                 s.overlay_shortcut = v;
             }
         }

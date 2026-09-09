@@ -273,7 +273,7 @@ pub fn update_settings(
     }
     if let Some(v) = overlay_shortcut {
         if !v.is_empty() && v != settings.overlay_shortcut {
-            reregister_shortcut(&app, &v)?;
+            reregister_shortcut_replacing(&app, &v, Some(&settings.overlay_shortcut))?;
             settings.overlay_shortcut = v;
         }
     }
@@ -316,11 +316,14 @@ pub fn toggle_overlay(app: &AppHandle) {
 }
 
 pub fn reregister_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    reregister_shortcut_replacing(app, shortcut, None)
+}
+
+fn bind_overlay_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
     let parsed: Shortcut = shortcut
         .parse()
         .map_err(|e| format!("无效快捷键: {e}"))?;
-    let _ = app.global_shortcut().unregister_all();
     app.global_shortcut()
         .on_shortcut(parsed, |app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
@@ -328,5 +331,24 @@ pub fn reregister_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String
             }
         })
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn reregister_shortcut_replacing(
+    app: &AppHandle,
+    shortcut: &str,
+    previous: Option<&str>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    shortcut
+        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+        .map_err(|e| format!("无效快捷键: {e}"))?;
+    let _ = app.global_shortcut().unregister_all();
+    if let Err(e) = bind_overlay_shortcut(app, shortcut) {
+        if let Some(prev) = previous {
+            let _ = bind_overlay_shortcut(app, prev);
+        }
+        return Err(e);
+    }
     Ok(())
 }

@@ -57,7 +57,76 @@ export function formatShortcut(raw: string): string {
     .replace(/Shift/gi, "⇧")
     .replace(/Alt|Option/gi, "⌥")
     .replace(/Control|Ctrl/gi, "⌃")
+    .replace(/Key([A-Z])/gi, "$1")
+    .replace(/Digit([0-9])/g, "$1")
+    .replace(/Arrow(Up|Down|Left|Right)/gi, "$1")
     .replace(/\s*\+\s*/g, "");
+}
+
+const MODIFIER_KEYS = new Set([
+  "Alt",
+  "AltGraph",
+  "CapsLock",
+  "Control",
+  "Fn",
+  "Meta",
+  "OS",
+  "Shift",
+  "Super",
+  "Hyper",
+]);
+
+const CODE_TO_KEY: Record<string, string> = {
+  Space: "Space",
+  Tab: "Tab",
+  Enter: "Enter",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  Insert: "Insert",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Backquote: "`",
+};
+
+function codeToShortcutKey(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (CODE_TO_KEY[code]) return CODE_TO_KEY[code];
+  if (/^Numpad/.test(code)) return code;
+  return null;
+}
+
+/** Convert a keydown event into a Tauri global-shortcut string, or null if incomplete. */
+export function eventToShortcut(ev: KeyboardEvent): string | null {
+  if (MODIFIER_KEYS.has(ev.key)) return null;
+  const key = codeToShortcutKey(ev.code);
+  if (!key) return null;
+  const functionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+  const hasPrimaryMod = ev.metaKey || ev.ctrlKey || ev.altKey;
+  if (!hasPrimaryMod && !functionKey) return null;
+  const parts: string[] = [];
+  if (ev.metaKey || ev.ctrlKey) parts.push("CommandOrControl");
+  if (ev.altKey) parts.push("Option");
+  if (ev.shiftKey) parts.push("Shift");
+  parts.push(key);
+  return parts.join("+");
 }
 
 export function typeLabel(type: PasteType): string {

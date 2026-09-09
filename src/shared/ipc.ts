@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   cleanupMaxItems: 500,
   cleanupMaxBytes: 1024 * 1024 * 1024,
   cleanupMaxAgeDays: null,
-  overlayShortcut: "CommandOrControl+Shift+V",
+  overlayShortcut: "Option+Shift+V",
 };
 
 export async function invokeSafe<T>(

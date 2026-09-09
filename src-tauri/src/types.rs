@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_AUTO_SYNC_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub const DEFAULT_CLEANUP_MAX_ITEMS: u64 = 500;
 pub const DEFAULT_CLEANUP_MAX_BYTES: u64 = 1024 * 1024 * 1024;
-pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+V";
+pub const DEFAULT_SHORTCUT: &str = "Option+Shift+V";
 pub const PAIR_TOKEN_TTL_MS: u64 = 60_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

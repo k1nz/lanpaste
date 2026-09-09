@@ -74,6 +74,10 @@ export const zhCN = {
   "settings.storage.days": "天",
   "settings.shortcuts.title": "快捷键",
   "settings.shortcuts.overlay": "打开剪贴板历史",
+  "settings.shortcuts.recording": "按下快捷键",
+  "settings.shortcuts.hint": "点击后按下新组合。Esc 取消。",
+  "settings.shortcuts.reset": "恢复默认",
+  "settings.shortcuts.edit": "修改打开剪贴板历史的快捷键",
   "settings.about.name": "LanPaste",
   "settings.about.tagline": "局域网、无服务器的跨设备剪贴板。",
   "settings.about.version": "版本 {version}",
@@ -98,6 +102,7 @@ export const zhCN = {
   "err.removed": "设备已移除",
   "err.disk": "磁盘空间不足",
   "err.sourceGone": "源设备已无此文件",
+  "err.invalidShortcut": "无法使用该快捷键",
 } as const;
 
 export type MsgKey = keyof typeof zhCN;

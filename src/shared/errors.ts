@@ -9,6 +9,7 @@ const RULES: Array<{ test: RegExp; key: MsgKey }> = [
   { test: /disk|space|volume/i, key: "err.disk" },
   { test: /not found|gone|missing|no longer/i, key: "err.sourceGone" },
   { test: /unavailable/i, key: "err.unavailable" },
+  { test: /无效快捷键|unsupported key|invalid hotkey|invalid format/i, key: "err.invalidShortcut" },
 ];
 
 export function localizeError(err: unknown): string {
