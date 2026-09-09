@@ -234,7 +234,7 @@ fn start_clipboard_watcher(state: AppState) {
                 .ok()
                 .map(|g| *g)
                 .unwrap_or(-1);
-            if count == suppress || clipboard::own_promise_active() {
+            if clipboard::should_ignore_own_change(count, suppress) {
                 continue;
             }
             let captured = match clipboard::read_native() {

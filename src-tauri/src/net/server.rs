@@ -22,7 +22,7 @@ use crate::types::{
 
 use super::pair::{token_expires_at, validate_token};
 use super::protocol::{
-    PairConfirm, PairConfirmResponse, PairRequest, PairRevoke, SyncEntryBody,
+    resolved_content_hash, PairConfirm, PairConfirmResponse, PairRequest, PairRevoke, SyncEntryBody,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -201,6 +201,14 @@ async fn sync_entry(
         return Ok(StatusCode::NO_CONTENT);
     }
 
+    let content_hash = resolved_content_hash(&parsed);
+    let echo = state
+        .with_store(|s| s.should_skip_duplicate_hash(&content_hash))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if echo {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
     let nearby = state
         .inner
         .nearby
@@ -222,15 +230,6 @@ async fn sync_entry(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn remember_clipboard_write(state: &AppState, count: i64) {
-    if let Ok(mut g) = state.inner.suppress_change_count.lock() {
-        *g = count;
-    }
-    if let Ok(mut g) = state.inner.last_change_count.lock() {
-        *g = count;
-    }
-}
-
 fn apply_auto_write(state: &AppState, parsed: &SyncEntryBody, device: &StoredDevice) {
     if !device.auto_write_clipboard {
         return;
@@ -245,7 +244,7 @@ fn apply_auto_write(state: &AppState, parsed: &SyncEntryBody, device: &StoredDev
     let has_file = parsed.items.iter().any(|i| i.item_type == "file");
     if should_claim_file_promise(true, has_file, parsed.total_bytes, cap) {
         match crate::clipboard::write_file_promise(&parsed.id) {
-            Ok(count) => remember_clipboard_write(state, count),
+            Ok(count) => state.remember_clipboard_write(count),
             Err(e) => eprintln!("file promise: {e}"),
         }
         return;
@@ -264,7 +263,7 @@ fn apply_auto_write(state: &AppState, parsed: &SyncEntryBody, device: &StoredDev
         return;
     }
     match crate::clipboard::write_native(&payload) {
-        Ok(count) => remember_clipboard_write(state, count),
+        Ok(count) => state.remember_clipboard_write(count),
         Err(e) => eprintln!("auto-write: {e}"),
     }
 }
@@ -347,7 +346,7 @@ fn ingest_remote(
             source_device_name: parsed.source_device_name.clone(),
             primary_type: parsed.primary_type.clone(),
             title: parsed.title.clone(),
-            content_hash: format!("sync:{}", parsed.id),
+            content_hash: resolved_content_hash(parsed),
             total_bytes: parsed.total_bytes,
             needs_file_download: needs_file,
             file_download_state: "idle".into(),

@@ -34,9 +34,7 @@ pub async fn paste_entry(app: AppHandle, state: State<'_, AppState>, id: String)
     }
     let payload = state.with_store(|s| clipboard::payload_from_store(s, &id))?;
     let count = clipboard::write_native(&payload)?;
-    if let Ok(mut g) = state.inner.suppress_change_count.lock() {
-        *g = count;
-    }
+    state.remember_clipboard_write(count);
     let target = state
         .inner
         .last_frontmost
@@ -112,9 +110,7 @@ pub fn copy_entry_to_clipboard(state: State<AppState>, id: String) -> Result<(),
     }
     let payload = state.with_store(|s| clipboard::payload_from_store(s, &id))?;
     let count = clipboard::write_native(&payload)?;
-    if let Ok(mut g) = state.inner.suppress_change_count.lock() {
-        *g = count;
-    }
+    state.remember_clipboard_write(count);
     Ok(())
 }
 

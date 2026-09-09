@@ -95,6 +95,15 @@ impl AppState {
             .map_err(|_| "store lock poisoned".to_string())?;
         f(&mut store)
     }
+
+    pub fn remember_clipboard_write(&self, count: i64) {
+        if let Ok(mut g) = self.inner.suppress_change_count.lock() {
+            *g = count;
+        }
+        if let Ok(mut g) = self.inner.last_change_count.lock() {
+            *g = count;
+        }
+    }
 }
 
 pub fn show_window(app: &AppHandle, label: &str) -> Result<(), String> {

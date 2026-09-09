@@ -14,6 +14,12 @@ pub type FileFulfill = Arc<dyn Fn(String) -> Result<PathBuf, String> + Send + Sy
 
 static OWN_PROMISE_COUNT: AtomicI64 = AtomicI64::new(-1);
 static SKIP_CLIPBOARD_READ: AtomicBool = AtomicBool::new(false);
+/// Ignore clipboard change-count ticks caused by our own writes. Extra
+/// NSPasteboard / Win32 updates often arrive after `write` returns, so a single
+/// `suppress_change_count` match is not enough and the watcher would ingest the
+/// same payload again and auto-sync it back to the sender.
+static OWN_WRITE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
+const OWN_WRITE_GRACE_MS: i64 = 800;
 static FILE_FULFILL: Mutex<Option<FileFulfill>> = Mutex::new(None);
 static FILE_PROMISE_ID: Mutex<Option<String>> = Mutex::new(None);
 
@@ -32,6 +38,16 @@ pub fn note_own_promise(count: Option<i64>) {
     }
 }
 
+pub fn mark_own_write(count: i64) {
+    note_own_promise(Some(count));
+    let until = crate::store::now_ms().saturating_add(OWN_WRITE_GRACE_MS);
+    OWN_WRITE_UNTIL_MS.store(until, Ordering::SeqCst);
+}
+
+pub fn own_write_in_grace() -> bool {
+    crate::store::now_ms() < OWN_WRITE_UNTIL_MS.load(Ordering::SeqCst)
+}
+
 pub fn own_promise_active() -> bool {
     if SKIP_CLIPBOARD_READ.load(Ordering::SeqCst) {
         return true;
@@ -43,6 +59,10 @@ pub fn own_promise_active() -> bool {
     pasteboard_change_count()
         .map(|c| c == marked)
         .unwrap_or(false)
+}
+
+pub fn should_ignore_own_change(count: i64, suppress: i64) -> bool {
+    count == suppress || own_promise_active() || own_write_in_grace()
 }
 
 #[cfg(target_os = "windows")]
@@ -89,7 +109,7 @@ pub fn write_file_promise(pasteboard_id: &str) -> Result<i64, String> {
         }
     };
     match &result {
-        Ok(count) => note_own_promise(Some(*count)),
+        Ok(count) => mark_own_write(*count),
         Err(_) => note_own_promise(None),
     }
     SKIP_CLIPBOARD_READ.store(false, Ordering::SeqCst);
@@ -173,6 +193,540 @@ pub fn parse_color(s: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn normalize_visible(s: &str) -> String {
+    s.replace('\u{00a0}', " ")
+        .replace('\u{200b}', "")
+        .replace('\u{feff}', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn entity_char(ent: &str) -> Option<char> {
+    match ent {
+        "nbsp" => Some('\u{00a0}'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "amp" => Some('&'),
+        "quot" => Some('"'),
+        "apos" | "#39" => Some('\''),
+        _ if ent.starts_with('#') => {
+            let num = if let Some(hex) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
+                u32::from_str_radix(hex, 16).ok()?
+            } else {
+                ent[1..].parse().ok()?
+            };
+            char::from_u32(num)
+        }
+        _ => None,
+    }
+}
+
+fn decode_entities_push(s: &str, out: &mut String) {
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some(j) = rest.find(';') else {
+            out.push_str(rest);
+            return;
+        };
+        if j > 32 {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        }
+        match entity_char(&rest[1..j]) {
+            Some(ch) => out.push(ch),
+            None => out.push_str(&rest[..=j]),
+        }
+        rest = &rest[j + 1..];
+    }
+    out.push_str(rest);
+}
+
+fn is_block_or_break(tag: &str) -> bool {
+    matches!(
+        tag,
+        "br" | "p"
+            | "div"
+            | "tr"
+            | "li"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "blockquote"
+            | "pre"
+            | "hr"
+            | "dt"
+            | "dd"
+            | "section"
+            | "article"
+            | "header"
+            | "footer"
+            | "nav"
+            | "figure"
+            | "figcaption"
+    )
+}
+
+fn tag_name_of(tag: &str) -> String {
+    tag.trim()
+        .trim_start_matches('/')
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn skip_until_close<'a>(rest: &'a str, name: &str) -> &'a str {
+    let closer = format!("</{name}>");
+    let lower = rest.to_ascii_lowercase();
+    match lower.find(&closer) {
+        Some(i) => &rest[i + closer.len()..],
+        None => "",
+    }
+}
+
+/// Visible text from clipboard HTML, skipping head/script/style and comments.
+pub fn html_visible_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while !rest.is_empty() {
+        let Some(i) = rest.find('<') else {
+            decode_entities_push(rest, &mut out);
+            break;
+        };
+        decode_entities_push(&rest[..i], &mut out);
+        rest = &rest[i..];
+        if rest.starts_with("<!--") {
+            rest = match rest[4..].find("-->") {
+                Some(j) => &rest[4 + j + 3..],
+                None => "",
+            };
+            continue;
+        }
+        let Some(end) = rest.find('>') else {
+            break;
+        };
+        let name = tag_name_of(&rest[1..end]);
+        rest = &rest[end + 1..];
+        if name == "script" || name == "style" || name == "head" || name == "noscript" {
+            rest = skip_until_close(rest, &name);
+            continue;
+        }
+        if is_block_or_break(&name) {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn has_open_tag(lower_html: &str, name: &str) -> bool {
+    let needle = format!("<{name}");
+    let mut from = 0;
+    while let Some(i) = lower_html[from..].find(&needle) {
+        let after = from + i + needle.len();
+        let next = lower_html[after..].chars().next();
+        if next
+            .map(|c| c.is_whitespace() || c == '>' || c == '/')
+            .unwrap_or(true)
+        {
+            return true;
+        }
+        from = after;
+    }
+    false
+}
+
+fn open_tag_has_attr(lower_html: &str, name: &str, attr: &str) -> bool {
+    let needle = format!("<{name}");
+    let mut from = 0;
+    while let Some(i) = lower_html[from..].find(&needle) {
+        let after = from + i + needle.len();
+        let next = lower_html[after..].chars().next();
+        if !next
+            .map(|c| c.is_whitespace() || c == '>' || c == '/')
+            .unwrap_or(true)
+        {
+            from = after;
+            continue;
+        }
+        let rest = &lower_html[after..];
+        let end = rest.find('>').unwrap_or(rest.len());
+        let attrs = &rest[..end];
+        let mut afrom = 0;
+        while let Some(j) = attrs[afrom..].find(attr) {
+            let abs = afrom + j;
+            let before_ok = abs == 0
+                || attrs[..abs]
+                    .chars()
+                    .rev()
+                    .next()
+                    .is_some_and(|c| c.is_whitespace() || c == '/');
+            let after_ok = attrs[abs + attr.len()..]
+                .chars()
+                .next()
+                .map(|c| c.is_whitespace() || c == '=' || c == '>' || c == '/')
+                .unwrap_or(true);
+            if before_ok && after_ok {
+                return true;
+            }
+            afrom = abs + attr.len();
+        }
+        from = after + end + 1;
+    }
+    false
+}
+
+/// Links, images, tables, lists, headings — not Chromium's styled-span wrapper.
+fn html_has_rich_markup(html: &str) -> bool {
+    let l = html.to_ascii_lowercase();
+    if open_tag_has_attr(&l, "a", "href") {
+        return true;
+    }
+    [
+        "img", "table", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "video", "audio", "iframe",
+        "object", "svg",
+    ]
+    .iter()
+    .any(|t| has_open_tag(&l, t))
+}
+
+fn html_is_plain_wrapper(html: &str, plain: &str) -> bool {
+    if html_has_rich_markup(html) {
+        return false;
+    }
+    let visible = html_visible_text(html);
+    if visible.trim().is_empty() {
+        return false;
+    }
+    normalize_visible(&visible) == normalize_visible(plain)
+}
+
+fn rtf_source(rtf: &[u8]) -> String {
+    let end = rtf
+        .iter()
+        .rposition(|&b| b != 0)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let bytes = &rtf[..end];
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().copied().map(char::from).collect(),
+    }
+}
+
+/// Images, tables, links, embedded objects — not a font/color wrapper.
+fn rtf_has_rich_markup(rtf: &[u8]) -> bool {
+    let s = rtf_source(rtf).to_ascii_lowercase();
+    s.contains("\\pict")
+        || s.contains("\\trowd")
+        || s.contains("\\cell")
+        || s.contains("hyperlink")
+        || s.contains("\\object")
+        || s.contains("\\shp")
+}
+
+fn rtf_dest_skip(word: &str) -> bool {
+    matches!(
+        word,
+        "fonttbl"
+            | "colortbl"
+            | "stylesheet"
+            | "info"
+            | "pict"
+            | "object"
+            | "header"
+            | "footer"
+            | "headerf"
+            | "footerf"
+            | "footnote"
+            | "annotation"
+            | "fldinst"
+            | "datafield"
+            | "generator"
+            | "listtable"
+            | "listoverridetable"
+            | "rsidtbl"
+            | "themedata"
+            | "colorschememapping"
+            | "latentstyles"
+            | "xmlnstbl"
+            | "filetbl"
+            | "mmath"
+            | "shpinst"
+            | "blipuid"
+            | "xe"
+            | "tc"
+    )
+}
+
+fn rtf_visible_text(rtf: &[u8]) -> String {
+    let src = rtf_source(rtf);
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut depth: i32 = 0;
+    let mut skip_until: Option<i32> = None;
+    let mut uc: usize = 1;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '{' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' => {
+                if skip_until == Some(depth) {
+                    skip_until = None;
+                }
+                depth = (depth - 1).max(0);
+                i += 1;
+            }
+            '\\' => {
+                i += 1;
+                if i >= chars.len() {
+                    break;
+                }
+                let n = chars[i];
+                if n == '\\' || n == '{' || n == '}' {
+                    if skip_until.is_none() {
+                        out.push(n);
+                    }
+                    i += 1;
+                    continue;
+                }
+                if n == '\'' {
+                    i += 1;
+                    let hex: String = chars[i..].iter().take(2).collect();
+                    if hex.len() == 2 && hex.chars().all(|h| h.is_ascii_hexdigit()) {
+                        i += 2;
+                        if skip_until.is_none() {
+                            if let Ok(b) = u8::from_str_radix(&hex, 16) {
+                                out.push(char::from(b));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if n == '*' {
+                    skip_until = Some(depth.max(1));
+                    i += 1;
+                    continue;
+                }
+                if n == '~' {
+                    if skip_until.is_none() {
+                        out.push('\u{00a0}');
+                    }
+                    i += 1;
+                    continue;
+                }
+                if n == '_' {
+                    if skip_until.is_none() {
+                        out.push('-');
+                    }
+                    i += 1;
+                    continue;
+                }
+                if n == '-' {
+                    i += 1;
+                    continue;
+                }
+                if !n.is_ascii_alphabetic() {
+                    i += 1;
+                    continue;
+                }
+                let start = i;
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                let word: String = chars[start..i].iter().collect();
+                let mut neg = false;
+                if chars.get(i) == Some(&'-') {
+                    neg = true;
+                    i += 1;
+                }
+                let num_start = i;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                let num = if i > num_start {
+                    let raw: String = chars[num_start..i].iter().collect();
+                    raw.parse::<i32>().ok().map(|n| if neg { -n } else { n })
+                } else {
+                    None
+                };
+                if chars.get(i) == Some(&' ') {
+                    i += 1;
+                }
+                if rtf_dest_skip(&word) {
+                    skip_until = Some(depth.max(1));
+                }
+                if skip_until.is_some() {
+                    continue;
+                }
+                match word.as_str() {
+                    "par" | "line" | "row" | "page" => out.push('\n'),
+                    "tab" => out.push('\t'),
+                    "emdash" => out.push('—'),
+                    "endash" => out.push('–'),
+                    "lquote" | "rquote" => out.push('\''),
+                    "ldblquote" | "rdblquote" => out.push('"'),
+                    "bullet" => out.push('•'),
+                    "uc" => {
+                        if let Some(n) = num {
+                            uc = n.max(0) as usize;
+                        }
+                    }
+                    "u" => {
+                        if let Some(n) = num {
+                            let cp = if n < 0 {
+                                (n as i32 + 65536) as u32
+                            } else {
+                                n as u32
+                            };
+                            if let Some(ch) = char::from_u32(cp) {
+                                out.push(ch);
+                            }
+                        }
+                        let mut left = uc;
+                        while left > 0 && i < chars.len() {
+                            if chars[i] == '\\' && chars.get(i + 1) == Some(&'\'') {
+                                i += 2;
+                                i += chars[i..]
+                                    .iter()
+                                    .take(2)
+                                    .take_while(|h| h.is_ascii_hexdigit())
+                                    .count();
+                            } else {
+                                i += 1;
+                            }
+                            left -= 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            '\n' | '\r' => i += 1,
+            _ => {
+                if skip_until.is_none() {
+                    out.push(c);
+                }
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn empty_captured() -> CapturedItem {
+    CapturedItem {
+        ty: PasteType::Text,
+        text: None,
+        html: None,
+        rtf: None,
+        url: None,
+        color: None,
+        image: None,
+        file_path: None,
+    }
+}
+
+/// Chromium / Electron / Word put styled HTML and RTF beside the same unicode text.
+/// Keep structurally rich formats; drop font/color wrappers so history is text.
+fn normalize_captured(captured: &CapturedPasteboard) -> CapturedPasteboard {
+    let mut plain = captured.items.iter().find_map(|i| {
+        (i.ty == PasteType::Text)
+            .then(|| i.text.clone())
+            .flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+
+    let mut items = Vec::with_capacity(captured.items.len());
+    let mut converted: Option<String> = None;
+    for item in &captured.items {
+        match item.ty {
+            PasteType::Html => {
+                let Some(html) = item.html.as_deref() else {
+                    items.push(item.clone());
+                    continue;
+                };
+                if html_has_rich_markup(html) {
+                    items.push(item.clone());
+                    continue;
+                }
+                let visible = html_visible_text(html);
+                let drop = match plain.as_deref() {
+                    Some(p) => html_is_plain_wrapper(html, p),
+                    None => !visible.trim().is_empty(),
+                };
+                if drop {
+                    remember_converted(&mut converted, &mut plain, visible);
+                } else {
+                    items.push(item.clone());
+                }
+            }
+            PasteType::Rtf => {
+                let Some(rtf) = item.rtf.as_deref() else {
+                    items.push(item.clone());
+                    continue;
+                };
+                if rtf_has_rich_markup(rtf) {
+                    items.push(item.clone());
+                    continue;
+                }
+                if plain.is_some() {
+                    continue;
+                }
+                let visible = rtf_visible_text(rtf);
+                if !visible.trim().is_empty() {
+                    remember_converted(&mut converted, &mut plain, visible);
+                } else {
+                    items.push(item.clone());
+                }
+            }
+            _ => items.push(item.clone()),
+        }
+    }
+    if let Some(text) = converted {
+        if items.iter().all(|i| i.ty != PasteType::Text) {
+            items.push(CapturedItem {
+                ty: PasteType::Text,
+                text: Some(text),
+                ..empty_captured()
+            });
+        }
+    }
+    CapturedPasteboard { items }
+}
+
+fn remember_converted(converted: &mut Option<String>, plain: &mut Option<String>, visible: String) {
+    if plain.is_none() && !visible.trim().is_empty() {
+        *plain = Some(visible.trim().to_string());
+        if converted.is_none() {
+            *converted = Some(visible);
+        }
+    }
+}
+
+fn html_title(html: &str, sidecar_text: Option<&str>) -> String {
+    if let Some(t) = sidecar_text.map(str::trim).filter(|s| !s.is_empty()) {
+        return truncate_title(t, 80);
+    }
+    let visible = html_visible_text(html);
+    if !visible.trim().is_empty() {
+        truncate_title(&visible, 80)
+    } else {
+        truncate_title(html, 80)
+    }
 }
 
 pub fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
@@ -381,17 +935,25 @@ pub fn ingest_captured(
     local_id: &str,
     locale_pref: &str,
 ) -> Result<Option<IngestResult>, String> {
+    let captured = normalize_captured(captured);
     if captured.items.is_empty() {
         return Ok(None);
     }
     let hash = captured.content_hash();
-    if store.last_content_hash()?.as_deref() == Some(hash.as_str()) {
+    if store.should_skip_duplicate_hash(&hash)? {
         return Ok(None);
     }
 
     let locale = crate::i18n::resolve(locale_pref);
     let id = uuid::Uuid::new_v4().to_string();
     let ptype = primary_type(&captured.types());
+    let sidecar_text = captured.items.iter().find_map(|i| {
+        (i.ty == PasteType::Text)
+            .then(|| i.text.as_deref())
+            .flatten()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    });
     let mut preview = Preview::default();
     let mut items: Vec<StoredItem> = Vec::new();
     let mut total_bytes = 0u64;
@@ -467,17 +1029,36 @@ pub fn ingest_captured(
             }
             PasteType::Html => {
                 if let Some(html) = &cap.html {
-                    preview.html = Some(truncate_title(html, 400));
+                    let visible = html_visible_text(html);
+                    preview.html = Some(truncate_title(
+                        if visible.trim().is_empty() {
+                            html
+                        } else {
+                            &visible
+                        },
+                        400,
+                    ));
                     if ptype == PasteType::Html {
-                        title = truncate_title(html, 80);
+                        title = html_title(html, sidecar_text);
                     }
                     total_bytes += html.len() as u64;
                 }
             }
             PasteType::Rtf => {
                 if let Some(rtf) = &cap.rtf {
+                    let visible = rtf_visible_text(rtf);
                     if ptype == PasteType::Rtf {
-                        title = "RTF".into();
+                        title = sidecar_text
+                            .map(|t| truncate_title(t, 80))
+                            .filter(|t| !t.is_empty())
+                            .or_else(|| {
+                                let t = visible.trim();
+                                (!t.is_empty()).then(|| truncate_title(t, 80))
+                            })
+                            .unwrap_or_else(|| "RTF".into());
+                        if preview.text.is_none() && !visible.trim().is_empty() {
+                            preview.text = Some(truncate_title(&visible, 400));
+                        }
                     }
                     total_bytes += rtf.len() as u64;
                 }
@@ -682,20 +1263,28 @@ pub fn read_native() -> Result<Option<CapturedPasteboard>, String> {
 }
 
 pub fn write_native(payload: &WritePayload) -> Result<i64, String> {
-    note_own_promise(None);
-    #[cfg(target_os = "macos")]
-    {
-        macos::write(payload)
+    SKIP_CLIPBOARD_READ.store(true, Ordering::SeqCst);
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            macos::write(payload)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            win32::write(payload)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = payload;
+            Ok(0i64)
+        }
+    };
+    SKIP_CLIPBOARD_READ.store(false, Ordering::SeqCst);
+    match &result {
+        Ok(count) => mark_own_write(*count),
+        Err(_) => note_own_promise(None),
     }
-    #[cfg(target_os = "windows")]
-    {
-        win32::write(payload)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = payload;
-        Ok(0)
-    }
+    result
 }
 
 pub fn simulate_paste() -> Result<(), String> {
@@ -755,13 +1344,13 @@ mod macos {
     use std::sync::Mutex;
 
     use objc2::runtime::ProtocolObject;
+    #[allow(deprecated)]
+    use objc2_app_kit::NSFilenamesPboardType;
     use objc2_app_kit::{
         NSApplicationActivationOptions, NSPasteboard, NSPasteboardTypeFileURL,
         NSPasteboardTypeHTML, NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeString,
         NSPasteboardTypeTIFF, NSPasteboardTypeURL, NSPasteboardWriting, NSWorkspace,
     };
-    #[allow(deprecated)]
-    use objc2_app_kit::NSFilenamesPboardType;
     use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
     pub fn change_count() -> Result<i64, String> {
@@ -785,7 +1374,10 @@ mod macos {
         let ws = NSWorkspace::sharedWorkspace();
         let apps = ws.runningApplications();
         for app in apps {
-            let n = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
+            let n = app
+                .localizedName()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             if n == name {
                 #[allow(deprecated)]
                 app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
@@ -931,7 +1523,9 @@ mod macos {
             for path in &payload.file_paths {
                 let s = NSString::from_str(&path.to_string_lossy());
                 let url = NSURL::fileURLWithPath_isDirectory(&s, path.is_dir());
-                writers.push(ProtocolObject::<dyn NSPasteboardWriting>::from_retained(url));
+                writers.push(ProtocolObject::<dyn NSPasteboardWriting>::from_retained(
+                    url,
+                ));
             }
             let array = NSArray::from_retained_slice(&writers);
             let _ = pb.writeObjects(&array);
@@ -1027,7 +1621,8 @@ mod macos {
         let provider = FilePromiseProvider::new(pasteboard_id.to_string());
         let item = NSPasteboardItem::new();
         #[allow(deprecated)]
-        let types = unsafe { NSArray::from_slice(&[NSPasteboardTypeFileURL, NSFilenamesPboardType]) };
+        let types =
+            unsafe { NSArray::from_slice(&[NSPasteboardTypeFileURL, NSFilenamesPboardType]) };
         let proto = ProtocolObject::<dyn NSPasteboardItemDataProvider>::from_ref(&*provider);
         if !item.setDataProvider_forTypes(&proto, &types) {
             return Err("无法声明延迟文件".into());
@@ -1084,8 +1679,8 @@ mod win32 {
     };
     use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
     use windows::Win32::System::Threading::{
-        AttachThreadInput, GetCurrentProcessId, OpenProcess,
-        QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        AttachThreadInput, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, SendInput, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
@@ -1582,7 +2177,8 @@ mod win32 {
     fn html_clipboard_payload(html: &str) -> Vec<u8> {
         let start_frag = "<!--StartFragment-->";
         let end_frag = "<!--EndFragment-->";
-        let body = format!("<html>\r\n<body>\r\n{start_frag}{html}{end_frag}\r\n</body>\r\n</html>");
+        let body =
+            format!("<html>\r\n<body>\r\n{start_frag}{html}{end_frag}\r\n</body>\r\n</html>");
         let dummy = format!(
             "Version:0.9\r\nStartHTML:{:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n",
             0, 0, 0, 0
@@ -1646,10 +2242,7 @@ mod win32 {
                     set_clipboard_bytes(fmt, rtf)?;
                 }
             }
-            let text = payload
-                .text
-                .clone()
-                .or_else(|| payload.url.clone());
+            let text = payload.text.clone().or_else(|| payload.url.clone());
             if let Some(text) = text {
                 set_clipboard_bytes(u32::from(CF_UNICODETEXT.0), &utf16_bytes_nul(&text))?;
             }
@@ -1695,8 +2288,7 @@ mod win32 {
             let c0 = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
             std::str::from_utf8(&bytes[..c0]).ok()
         })?;
-        if let (Some(a), Some(b)) = (s.find("<!--StartFragment-->"), s.find("<!--EndFragment-->"))
-        {
+        if let (Some(a), Some(b)) = (s.find("<!--StartFragment-->"), s.find("<!--EndFragment-->")) {
             let start = a + "<!--StartFragment-->".len();
             if start <= b {
                 return Some(s[start..b].to_string());
@@ -1953,6 +2545,32 @@ mod tests {
         }
     }
 
+    fn cap_html(html: &str) -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::Html,
+            text: None,
+            html: Some(html.into()),
+            rtf: None,
+            url: None,
+            color: None,
+            image: None,
+            file_path: None,
+        }
+    }
+
+    fn cap_rtf(rtf: &str) -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::Rtf,
+            text: None,
+            html: None,
+            rtf: Some(rtf.as_bytes().to_vec()),
+            url: None,
+            color: None,
+            image: None,
+            file_path: None,
+        }
+    }
+
     #[test]
     fn file_ingest_keeps_name_despite_text_sidecar() {
         let dir = tempfile::tempdir().unwrap();
@@ -1971,8 +2589,7 @@ mod tests {
         let pb = store.get_pasteboard(&result.id).unwrap().unwrap();
         assert_eq!(pb.primary_type, "file");
         assert_eq!(pb.title, "新增 文本文档.txt");
-        let preview: crate::types::Preview =
-            serde_json::from_str(&pb.preview_json).unwrap();
+        let preview: crate::types::Preview = serde_json::from_str(&pb.preview_json).unwrap();
         assert_eq!(preview.file_name.as_deref(), Some("新增 文本文档.txt"));
         assert!(preview.text.is_none());
         let payload = payload_from_store(&store, &result.id).unwrap();
@@ -2000,7 +2617,9 @@ mod tests {
         let mut img = image::RgbImage::new(w, h);
         for (x, y, p) in img.enumerate_pixels_mut() {
             if noisy {
-                let n = x.wrapping_mul(1_103_515_245).wrapping_add(y.wrapping_mul(12_345));
+                let n = x
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(y.wrapping_mul(12_345));
                 *p = image::Rgb([(n >> 16) as u8, (n >> 8) as u8, n as u8]);
             } else {
                 *p = image::Rgb([(x % 256) as u8, (y % 256) as u8, 80]);
@@ -2109,5 +2728,206 @@ mod tests {
         assert!(!looks_like_image_name("archive.tar.gz"));
         assert!(looks_like_image_magic(&png_bytes(8, 8, false)));
         assert!(!looks_like_image_magic(b"hello"));
+    }
+
+    const CHROMIUM_HTML: &str = r#"<meta charset="UTF-8"><span style="caret-color: rgb(0, 0, 0); color: rgb(0, 0, 0); font-style: normal;">管理修改账户信息</span>"#;
+
+    #[test]
+    fn chromium_wrapper_visible_text() {
+        assert_eq!(html_visible_text(CHROMIUM_HTML).trim(), "管理修改账户信息");
+        assert!(html_is_plain_wrapper(CHROMIUM_HTML, "管理修改账户信息"));
+        assert!(!html_has_rich_markup(CHROMIUM_HTML));
+    }
+
+    #[test]
+    fn chromium_wrapper_ingest_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_html(CHROMIUM_HTML), cap_text("管理修改账户信息")],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Text);
+        assert_eq!(entry.title, "管理修改账户信息");
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        assert_eq!(payload.text.as_deref(), Some("管理修改账户信息"));
+        assert!(payload.html.is_none());
+    }
+
+    #[test]
+    fn chromium_html_only_becomes_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_html(CHROMIUM_HTML)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Text);
+        assert_eq!(entry.title, "管理修改账户信息");
+    }
+
+    #[test]
+    fn linked_html_stays_html_with_text_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let html = r#"see <a href="https://example.com">here</a>"#;
+        let captured = CapturedPasteboard {
+            items: vec![cap_html(html), cap_text("see here")],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Html);
+        assert_eq!(entry.title, "see here");
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        assert_eq!(payload.html.as_deref(), Some(html));
+        assert_eq!(payload.text.as_deref(), Some("see here"));
+    }
+
+    #[test]
+    fn vscode_highlighted_copy_is_text() {
+        let html = r#"<meta charset="utf-8"><div style="color: #d4d4d4;font-family: Consolas"><span style="color: #569cd6;">fn</span><span> main() {}</span></div>"#;
+        assert!(html_is_plain_wrapper(html, "fn main() {}"));
+        let n = normalize_captured(&CapturedPasteboard {
+            items: vec![cap_html(html), cap_text("fn main() {}")],
+        });
+        assert!(n.items.iter().all(|i| i.ty != PasteType::Html));
+        assert_eq!(primary_type(&n.types()), PasteType::Text);
+    }
+
+    const COCOA_RTF: &str = r#"{\rtf1\ansi\ansicpg1252\cocoartf2822
+{\fonttbl\f0\fnil\fcharset0 HelveticaNeue;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+\pard\tx560\pardirnatural\partightenfactor0
+
+\f0\fs28 \cf2 hello world}"#;
+
+    const UNICODE_RTF: &str = r#"{\rtf1\ansi\ansicpg936\cocoartf2822
+{\fonttbl\f0\fnil\fcharset134 PingFangSC-Regular;}
+{\colortbl;\red255\green255\blue255;}
+\pard\tx560\pardirnatural\partightenfactor0
+
+\f0\fs28 \cf0 \u31649?\u29702?\u20462?\u25913?\u36134?\u25143?\u20449?\u24687?}"#;
+
+    #[test]
+    fn cocoa_rtf_visible_text() {
+        assert_eq!(
+            normalize_visible(&rtf_visible_text(COCOA_RTF.as_bytes())),
+            "hello world"
+        );
+        assert_eq!(
+            normalize_visible(&rtf_visible_text(UNICODE_RTF.as_bytes())),
+            "管理修改账户信息"
+        );
+        assert!(!rtf_has_rich_markup(COCOA_RTF.as_bytes()));
+    }
+
+    #[test]
+    fn rtf_wrapper_with_text_ingest_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![
+                cap_html(CHROMIUM_HTML),
+                cap_rtf(UNICODE_RTF),
+                cap_text("管理修改账户信息"),
+            ],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Text);
+        assert_eq!(entry.title, "管理修改账户信息");
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        assert_eq!(payload.text.as_deref(), Some("管理修改账户信息"));
+        assert!(payload.html.is_none());
+        assert!(payload.rtf.is_none());
+    }
+
+    #[test]
+    fn rtf_only_wrapper_becomes_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_rtf(COCOA_RTF)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Text);
+        assert_eq!(entry.title, "hello world");
+    }
+
+    #[test]
+    fn rtf_with_picture_stays_rtf() {
+        let rtf = r#"{\rtf1\ansi{\fonttbl\f0\fnil Helvetica;}{\pict\pngblip 89504e47}hello}"#;
+        assert!(rtf_has_rich_markup(rtf.as_bytes()));
+        let n = normalize_captured(&CapturedPasteboard {
+            items: vec![cap_rtf(rtf), cap_text("hello")],
+        });
+        assert!(n.items.iter().any(|i| i.ty == PasteType::Rtf));
+        assert_eq!(primary_type(&n.types()), PasteType::Rtf);
+    }
+
+    #[test]
+    fn ingest_skips_consecutive_duplicate_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_text("hello echo")],
+        };
+        assert!(ingest_captured(&mut store, &captured, "本机", "a", "zh-CN")
+            .unwrap()
+            .is_some());
+        assert!(ingest_captured(&mut store, &captured, "本机", "a", "zh-CN")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn ingest_skips_when_latest_is_remote_with_same_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_text("sync echo")],
+        };
+        let hash = captured.content_hash();
+        let pb = crate::store::StoredPasteboard {
+            id: "remote-1".into(),
+            copied_at: 1,
+            source_device_id: Some("peer".into()),
+            source_device_name: "Peer".into(),
+            primary_type: "text".into(),
+            title: "sync echo".into(),
+            content_hash: hash,
+            total_bytes: 9,
+            needs_file_download: false,
+            file_download_state: "idle".into(),
+            download_token: None,
+            source_host: None,
+            source_port: None,
+            preview_json: "{}".into(),
+        };
+        store.insert_pasteboard(&pb, &[]).unwrap();
+        assert!(ingest_captured(&mut store, &captured, "本机", "a", "zh-CN")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn own_write_grace_ignores_extra_change_counts() {
+        mark_own_write(42);
+        assert!(own_write_in_grace());
+        assert!(should_ignore_own_change(99, -1));
+        assert!(should_ignore_own_change(42, 42));
     }
 }

@@ -172,6 +172,10 @@ impl Store {
             .map_err(|e| format!("last hash: {e}"))
     }
 
+    pub fn should_skip_duplicate_hash(&self, hash: &str) -> Result<bool, String> {
+        Ok(self.last_content_hash()?.as_deref() == Some(hash))
+    }
+
     pub fn insert_pasteboard(
         &mut self,
         pb: &StoredPasteboard,
@@ -1135,5 +1139,24 @@ mod tests {
         let thumb = list[0].preview.image_thumb.as_deref().unwrap();
         assert!(thumb.contains(&hash));
         assert_eq!(list[0].preview.path.as_deref(), Some(thumb));
+    }
+
+    #[test]
+    fn recent_content_hash_detects_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let mut a = sample_pb("pb-a");
+        a.content_hash = "hash-hello".into();
+        a.copied_at = 10;
+        store.insert_pasteboard(&a, &[]).unwrap();
+        assert!(store.should_skip_duplicate_hash("hash-hello").unwrap());
+        assert!(!store.should_skip_duplicate_hash("hash-other").unwrap());
+
+        let mut b = sample_pb("pb-b");
+        b.content_hash = "hash-world".into();
+        b.copied_at = 20;
+        store.insert_pasteboard(&b, &[]).unwrap();
+        assert!(!store.should_skip_duplicate_hash("hash-hello").unwrap());
+        assert!(store.should_skip_duplicate_hash("hash-world").unwrap());
     }
 }

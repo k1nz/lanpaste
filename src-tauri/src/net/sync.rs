@@ -17,6 +17,7 @@ pub fn build_sync_body(
     primary_type: &str,
     title: &str,
     total_bytes: u64,
+    content_hash: &str,
     items: &[StoredItem],
     image_bytes: &[(String, Vec<u8>)],
 ) -> SyncEntryBody {
@@ -62,6 +63,7 @@ pub fn build_sync_body(
         primary_type: primary_type.to_string(),
         title: title.to_string(),
         total_bytes,
+        content_hash: content_hash.to_string(),
         items,
     }
 }
@@ -190,6 +192,7 @@ pub async fn sync_entry_to_device(
         &pb.primary_type,
         &pb.title,
         pb.total_bytes,
+        &pb.content_hash,
         &items,
         &image_bytes,
     );
@@ -425,6 +428,7 @@ mod tests {
             "file",
             "a.bin",
             1024,
+            "hash-file",
             &items,
             &fake_bytes,
         );
@@ -475,6 +479,7 @@ mod tests {
             "file",
             "photo.png",
             preview.len() as u64,
+            "hash-file-img",
             &[item("f1", "file"), item("img", "image")],
             &[("img".into(), preview)],
         );
@@ -502,9 +507,11 @@ mod tests {
             "image",
             "图片",
             png.len() as u64,
+            "hash-img",
             &[item("img", "image")],
             &[("img".into(), png.clone())],
         );
+        assert_eq!(body.content_hash, "hash-img");
         let b64 = body.items[0].image_b64.as_deref().expect("image_b64");
         assert_eq!(
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).unwrap(),
