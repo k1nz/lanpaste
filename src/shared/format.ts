@@ -1,5 +1,5 @@
 import type { HistoryEntry, PasteType } from "./types";
-import { t, type MsgKey } from "./i18n";
+import { resolvedLocale, t, type MsgKey } from "./i18n";
 
 export function toMs(ts: number): number {
   return ts < 1e12 ? ts * 1000 : ts;
@@ -20,7 +20,7 @@ export function groupDateLabel(copiedAt: number): string {
   if (day.getTime() === today.getTime()) return t("overlay.today");
   if (day.getTime() === yesterday.getTime()) return t("overlay.yesterday");
   const sameYear = date.getFullYear() === today.getFullYear();
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(resolvedLocale.value, {
     month: "short",
     day: "numeric",
     year: sameYear ? undefined : "numeric",

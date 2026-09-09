@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { HistoryEntry, TransferProgressPayload } from "../../shared/types";
 import { formatBytes, hasImagePreview, typeLabel } from "../../shared/format";
-import { t } from "../../shared/i18n";
+import { displaySource, displayTitle, t } from "../../shared/i18n";
 import { mediaSrc } from "../../shared/ipc";
 
 const props = defineProps<{
@@ -39,16 +39,16 @@ const transferring = computed(() => {
         <code>{{ entry.preview.color }}</code>
       </div>
       <div v-else-if="imageSrc" class="image-block">
-        <img :src="imageSrc" :alt="entry.title" />
+        <img :src="imageSrc" :alt="displayTitle(entry.title, entry.primaryType)" />
         <p v-if="entry.primaryType === 'file'" class="file-name">
-          {{ entry.preview.fileName || entry.title }}
+          {{ entry.preview.fileName || displayTitle(entry.title, entry.primaryType) }}
         </p>
       </div>
       <div v-else-if="entry.primaryType === 'url' && entry.preview.url" class="text-block url">
         {{ entry.preview.url }}
       </div>
       <div v-else-if="entry.primaryType === 'file'" class="file-block">
-        <p class="file-name">{{ entry.preview.fileName || entry.title }}</p>
+        <p class="file-name">{{ entry.preview.fileName || displayTitle(entry.title, entry.primaryType) }}</p>
         <p v-if="entry.preview.fileSize != null" class="muted">
           {{ formatBytes(entry.preview.fileSize) }}
         </p>
@@ -74,7 +74,7 @@ const transferring = computed(() => {
       <dl>
         <div>
           <dt>{{ t("overlay.source") }}</dt>
-          <dd>{{ entry.sourceDeviceName || t("overlay.local") }}</dd>
+          <dd>{{ displaySource(entry.sourceDeviceName) }}</dd>
         </div>
         <div>
           <dt>{{ t("overlay.type") }}</dt>

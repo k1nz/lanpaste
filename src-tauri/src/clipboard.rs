@@ -379,6 +379,7 @@ pub fn ingest_captured(
     captured: &CapturedPasteboard,
     local_name: &str,
     local_id: &str,
+    locale_pref: &str,
 ) -> Result<Option<IngestResult>, String> {
     if captured.items.is_empty() {
         return Ok(None);
@@ -388,12 +389,13 @@ pub fn ingest_captured(
         return Ok(None);
     }
 
+    let locale = crate::i18n::resolve(locale_pref);
     let id = uuid::Uuid::new_v4().to_string();
     let ptype = primary_type(&captured.types());
     let mut preview = Preview::default();
     let mut items: Vec<StoredItem> = Vec::new();
     let mut total_bytes = 0u64;
-    let mut title = String::from("剪贴板");
+    let mut title = crate::i18n::t(locale, "overlay.genericClipboard");
 
     for (idx, cap) in captured.items.iter().enumerate() {
         let item_id = uuid::Uuid::new_v4().to_string();
@@ -458,7 +460,7 @@ pub fn ingest_captured(
                     }
                     apply_image_preview(store, &mut preview, &hash, bytes);
                     if ptype == PasteType::Image {
-                        title = "图片".into();
+                        title = crate::i18n::t(locale, "type.image");
                     }
                     total_bytes += size;
                 }
@@ -1963,7 +1965,7 @@ mod tests {
                 cap_text(r"C:\Users\me\Desktop\新增 文本文档.txt"),
             ],
         };
-        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
             .unwrap()
             .unwrap();
         let pb = store.get_pasteboard(&result.id).unwrap().unwrap();
@@ -2019,7 +2021,7 @@ mod tests {
         let captured = CapturedPasteboard {
             items: vec![cap_image(small)],
         };
-        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
             .unwrap()
             .unwrap();
         let entry = store.get_entry(&result.id).unwrap().unwrap();
@@ -2043,7 +2045,7 @@ mod tests {
         let captured = CapturedPasteboard {
             items: vec![cap_image(large)],
         };
-        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
             .unwrap()
             .unwrap();
         let entry = store.get_entry(&result.id).unwrap().unwrap();
@@ -2061,7 +2063,7 @@ mod tests {
         let captured = CapturedPasteboard {
             items: vec![cap_file(src), cap_text("/tmp/截图.png")],
         };
-        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
             .unwrap()
             .unwrap();
         let entry = store.get_entry(&result.id).unwrap().unwrap();
@@ -2089,7 +2091,7 @@ mod tests {
         let captured = CapturedPasteboard {
             items: vec![cap_file(src)],
         };
-        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
             .unwrap()
             .unwrap();
         let entry = store.get_entry(&result.id).unwrap().unwrap();

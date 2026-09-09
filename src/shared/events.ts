@@ -42,3 +42,7 @@ export function onTransferProgress(handler: (payload: TransferProgressPayload) =
 export function onOverlayShown(handler: () => void) {
   return onEvent<unknown>("overlay-shown", () => handler());
 }
+
+export function onLocaleChanged(handler: (resolved: string) => void) {
+  return onEvent<string>("locale-changed", handler);
+}

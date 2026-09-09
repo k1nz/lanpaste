@@ -1,5 +1,6 @@
 import type { HistoryEntry, PairedDevice } from "../shared/types";
 import { t } from "../shared/i18n";
+import { isApplePlatform } from "../shared/ipc";
 
 export type ActionId =
   | "paste"
@@ -34,7 +35,10 @@ export function buildActionItems(
     },
   ];
   if (entry.primaryType === "file") {
-    list.push({ id: "reveal", label: t("overlay.revealInFinder") });
+    list.push({
+      id: "reveal",
+      label: t(isApplePlatform() ? "overlay.revealInFinder" : "overlay.revealInExplorer"),
+    });
   }
   list.push({ id: "delete", label: t("overlay.delete"), destructive: true });
   if (entry.primaryType === "color" && entry.preview.color) {

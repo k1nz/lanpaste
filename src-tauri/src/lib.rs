@@ -2,6 +2,7 @@ mod cleanup;
 mod clipboard;
 mod crypto;
 mod device;
+mod i18n;
 mod ipc;
 mod net;
 mod state;
@@ -94,6 +95,7 @@ pub fn run() {
                     last_pairing_show: Mutex::new(None),
                     last_pairing_input: Mutex::new(None),
                     overlay_blur_hide_at: Mutex::new(None),
+                    tray: Mutex::new(None),
                 }),
             };
             app.manage(state.clone());
@@ -112,6 +114,7 @@ pub fn run() {
             }
 
             setup_tray(app)?;
+            i18n::apply_native_ui(app.handle(), i18n::resolve(&settings.locale));
             if let Err(e) = ipc::reregister_shortcut(&handle, &settings.overlay_shortcut) {
                 eprintln!("shortcut: {e}");
                 let _ = ipc::reregister_shortcut(&handle, types::DEFAULT_SHORTCUT);
@@ -143,10 +146,28 @@ pub fn run() {
 }
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let history = MenuItem::with_id(app, "history", "打开剪贴板历史", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let locale = {
+        let state = app.state::<AppState>();
+        let pref = state
+            .inner
+            .settings
+            .lock()
+            .ok()
+            .map(|s| s.locale.clone())
+            .unwrap_or_else(|| "system".into());
+        i18n::resolve(&pref)
+    };
+    let history = MenuItem::with_id(app, "history", i18n::t(locale, "tray.history"), true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", i18n::t(locale, "tray.settings"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", i18n::t(locale, "tray.quit"), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&history, &settings, &quit])?;
+    if let Ok(mut g) = app.state::<AppState>().inner.tray.lock() {
+        *g = Some(i18n::TrayMenu {
+            history: history.clone(),
+            settings: settings.clone(),
+            quit: quit.clone(),
+        });
+    }
 
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
@@ -220,12 +241,20 @@ fn start_clipboard_watcher(state: AppState) {
                 Ok(Some(c)) => c,
                 _ => continue,
             };
+            let locale_pref = state
+                .inner
+                .settings
+                .lock()
+                .ok()
+                .map(|s| s.locale.clone())
+                .unwrap_or_else(|| "system".into());
             let ingested = state.with_store(|s| {
                 clipboard::ingest_captured(
                     s,
                     &captured,
                     &state.inner.device_name,
                     &state.inner.identity.instance_id,
+                    &locale_pref,
                 )
             });
             if let Ok(Some(result)) = ingested {

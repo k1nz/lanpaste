@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::crypto::Identity;
 use crate::device::NearbyInfo;
+use crate::i18n::TrayMenu;
 use crate::store::Store;
 use crate::types::{AppSettings, PairingInputPayload, PairingShowPayload};
 
@@ -41,6 +42,7 @@ pub struct Inner {
     pub last_pairing_show: Mutex<Option<PairingShowPayload>>,
     pub last_pairing_input: Mutex<Option<PairingInputPayload>>,
     pub overlay_blur_hide_at: Mutex<Option<Instant>>,
+    pub tray: Mutex<Option<TrayMenu>>,
 }
 
 #[derive(Debug, Clone)]

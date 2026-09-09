@@ -22,10 +22,10 @@ const label = computed(() =>
   props.modelValue === "all" ? t("overlay.allTypes") : typeLabel(props.modelValue),
 );
 
-const options: Array<{ value: PasteType | "all"; label: string }> = [
-  { value: "all", label: t("overlay.allTypes") },
+const options = computed(() => [
+  { value: "all" as const, label: t("overlay.allTypes") },
   ...PASTE_TYPES.map((value) => ({ value, label: typeLabel(value) })),
-];
+]);
 
 function toggle() {
   emit("update:open", !props.open);

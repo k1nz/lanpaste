@@ -811,6 +811,9 @@ impl Store {
                 s.overlay_shortcut = v;
             }
         }
+        if let Some(v) = self.get_setting("locale")? {
+            s.locale = crate::i18n::normalize_pref(&v);
+        }
         let _ = (
             DEFAULT_AUTO_SYNC_MAX_BYTES,
             DEFAULT_CLEANUP_MAX_ITEMS,
@@ -839,6 +842,7 @@ impl Store {
             .unwrap_or_default();
         self.put_setting("cleanupMaxAgeDays", &age)?;
         self.put_setting("overlayShortcut", &s.overlay_shortcut)?;
+        self.put_setting("locale", &s.locale)?;
         Ok(())
     }
 

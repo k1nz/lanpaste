@@ -47,12 +47,15 @@ export interface PairedDevice {
   trustBroken: boolean;
 }
 
+export type LocalePref = "system" | "en-US" | "zh-CN";
+
 export interface AppSettings {
   autoSyncMaxBytes: number;
   cleanupMaxItems: number;
   cleanupMaxBytes: number;
   cleanupMaxAgeDays: number | null;
   overlayShortcut: string;
+  locale: LocalePref;
 }
 
 export interface PairingShowPayload {

@@ -37,7 +37,7 @@
       },
       {
         "label": "settings",
-        "title": "LanPaste 设置",
+        "title": "LanPaste Settings",
         "url": "/?window=settings",
         "width": 720,
         "height": 560,
@@ -46,7 +46,7 @@
       },
       {
         "label": "pairing-show",
-        "title": "配对",
+        "title": "Pairing",
         "url": "/?window=pairing-show",
         "width": 360,
         "height": 220,
@@ -67,7 +67,7 @@
       },
       {
         "label": "pairing-input",
-        "title": "输入配对码",
+        "title": "Enter pairing code",
         "url": "/?window=pairing-input",
         "width": 400,
         "height": 220,

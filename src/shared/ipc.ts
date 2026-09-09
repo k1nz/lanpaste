@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { isLocalePref } from "./i18n";
 import type {
   AppSettings,
   HistoryEntry,
@@ -7,7 +8,7 @@ import type {
   PasteType,
 } from "./types";
 
-function isApplePlatform(): boolean {
+export function isApplePlatform(): boolean {
   if (typeof navigator === "undefined") return false;
   return /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
 }
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   cleanupMaxBytes: 1024 * 1024 * 1024,
   cleanupMaxAgeDays: null,
   overlayShortcut: DEFAULT_OVERLAY_SHORTCUT,
+  locale: "system",
 };
 
 export async function invokeSafe<T>(
@@ -127,7 +129,13 @@ export function removeDevice(instanceId: string) {
 }
 
 export async function getSettings(): Promise<AppSettings> {
-  return (await invokeSafe<AppSettings>("get_settings")) ?? { ...DEFAULT_SETTINGS };
+  const s = await invokeSafe<AppSettings>("get_settings");
+  if (!s) return { ...DEFAULT_SETTINGS };
+  return {
+    ...DEFAULT_SETTINGS,
+    ...s,
+    locale: isLocalePref(s.locale) ? s.locale : "system",
+  };
 }
 
 export function updateSettings(partial: Partial<AppSettings>) {

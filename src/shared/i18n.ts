@@ -1,119 +1,78 @@
-export const zhCN = {
-  "overlay.searchPlaceholder": "搜索历史…",
-  "overlay.allTypes": "全部类型",
-  "overlay.today": "Today",
-  "overlay.yesterday": "Yesterday",
-  "overlay.emptyTitle": "无匹配条目",
-  "overlay.emptyHint": "试试清空类型过滤",
-  "overlay.clipboardHistory": "Clipboard History",
-  "overlay.pasteTo": "粘贴到「{app}」",
-  "overlay.paste": "粘贴",
-  "overlay.actions": "Actions",
-  "overlay.copyToClipboard": "复制到本机剪贴板",
-  "overlay.syncTo": "同步到",
-  "overlay.revealInFinder": "在访达中显示",
-  "overlay.delete": "删除",
-  "overlay.copyColor": "复制颜色值",
-  "overlay.copyUrl": "复制 URL",
-  "overlay.noDevices": "暂无已配对设备",
-  "overlay.offline": "离线",
-  "overlay.pendingDownload": "待下载",
-  "overlay.transferFailed": "传输失败，按 Enter 重试",
-  "overlay.information": "Information",
-  "overlay.source": "来源",
-  "overlay.type": "类型",
-  "overlay.path": "路径",
-  "overlay.dimensions": "尺寸",
-  "overlay.size": "大小",
-  "overlay.local": "本机",
-  "overlay.noPreview": "无预览",
+import { ref } from "vue";
+import enUS from "../locales/en-US.json";
+import zhCN from "../locales/zh-CN.json";
 
-  "type.text": "文本",
-  "type.url": "URL",
-  "type.color": "颜色",
-  "type.html": "HTML",
-  "type.rtf": "RTF",
-  "type.image": "图片",
-  "type.file": "文件",
+export type LocaleId = "en-US" | "zh-CN";
+export type LocalePref = "system" | LocaleId;
+export type MsgKey = keyof typeof enUS;
 
-  "settings.title": "设置",
-  "settings.nav.general": "通用",
-  "settings.nav.devices": "设备",
-  "settings.nav.storage": "存储与清理",
-  "settings.nav.shortcuts": "快捷键",
-  "settings.nav.about": "关于",
-  "settings.general.title": "通用",
-  "settings.general.body":
-    "自动写入剪贴板、允许发送与允许接收均按设备单独设置，默认全部开启。开启后文字会立刻进入系统剪贴板；文件只在你粘贴时才下载，不会预先占磁盘。",
-  "settings.general.goDevices": "前往设备",
-  "settings.devices.nearby": "附近",
-  "settings.devices.mine": "我的设备",
-  "settings.devices.add": "添加",
-  "settings.devices.emptyNearby": "未发现附近设备",
-  "settings.devices.emptyPaired": "尚未配对设备",
-  "settings.devices.note": "备注",
-  "settings.devices.editNote": "修改备注",
-  "settings.devices.remove": "移除",
-  "settings.devices.saveNote": "保存",
-  "settings.devices.cancel": "取消",
-  "settings.devices.allowSend": "允许发送",
-  "settings.devices.allowReceive": "允许接收",
-  "settings.devices.autoWrite": "自动写入剪贴板",
-  "settings.devices.autoWriteHint": "文字立刻写入；文件在系统粘贴时再下载。",
-  "settings.devices.online": "在线",
-  "settings.devices.offline": "离线",
-  "settings.devices.trustBroken": "信任失效，需重新配对",
-  "settings.storage.title": "存储与清理",
-  "settings.storage.autoSync": "自动同步体积上限",
-  "settings.storage.autoSyncHint": "超过此体积的条目不会自动出网（默认 20MB）。",
-  "settings.storage.maxItems": "最大条数",
-  "settings.storage.maxBytes": "最大存储体积",
-  "settings.storage.maxAge": "保留天数",
-  "settings.storage.maxAgeHint": "留空表示不按天数清理。先到先限。",
-  "settings.storage.mb": "MB",
-  "settings.storage.gb": "GB",
-  "settings.storage.days": "天",
-  "settings.shortcuts.title": "快捷键",
-  "settings.shortcuts.overlay": "打开剪贴板历史",
-  "settings.shortcuts.recording": "按下快捷键",
-  "settings.shortcuts.hint": "点击后按下新组合。Esc 取消。",
-  "settings.shortcuts.reset": "恢复默认",
-  "settings.shortcuts.edit": "修改打开剪贴板历史的快捷键",
-  "settings.about.name": "LanPaste",
-  "settings.about.tagline": "局域网、无服务器的跨设备剪贴板。",
-  "settings.about.version": "版本 {version}",
+const catalogs: Record<LocaleId, Record<MsgKey, string>> = {
+  "en-US": enUS,
+  "zh-CN": zhCN,
+};
 
-  "pairing.show.title": "配对码",
-  "pairing.show.hint": "在另一台设备上输入此验证码",
-  "pairing.show.expired": "已过期",
-  "pairing.show.countdown": "{seconds}s",
-  "pairing.input.title": "输入配对码",
-  "pairing.input.hint": "正在与「{name}」配对",
-  "pairing.input.placeholder": "6 位数字",
-  "pairing.input.submit": "确认",
-  "pairing.input.cancel": "取消",
-  "pairing.waiting": "等待配对…",
+export const localePref = ref<LocalePref>("system");
+export const resolvedLocale = ref<LocaleId>(detectSystemLocale());
 
-  "err.generic": "操作失败",
-  "err.unavailable": "后端尚未就绪",
-  "err.tokenInvalid": "配对码不正确",
-  "err.tokenExpired": "配对码已过期",
-  "err.offline": "设备离线",
-  "err.rejected": "对端拒绝接收",
-  "err.removed": "设备已移除",
-  "err.disk": "磁盘空间不足",
-  "err.tooLarge": "内容体积过大，无法同步",
-  "err.sourceGone": "源设备已无此文件",
-  "err.invalidShortcut": "无法使用该快捷键",
-} as const;
+export function detectSystemLocale(): LocaleId {
+  const lang =
+    typeof navigator !== "undefined" ? navigator.language || navigator.languages?.[0] || "" : "";
+  return lang.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+}
 
-export type MsgKey = keyof typeof zhCN;
+export function isLocalePref(value: string | undefined | null): value is LocalePref {
+  return value === "system" || value === "en-US" || value === "zh-CN";
+}
+
+export function resolveLocale(pref: LocalePref, system = detectSystemLocale()): LocaleId {
+  if (pref === "en-US" || pref === "zh-CN") return pref;
+  return system;
+}
+
+function applyDocumentLang(locale: LocaleId) {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = locale;
+}
+
+export function applyLocalePref(pref: LocalePref) {
+  localePref.value = pref;
+  resolvedLocale.value = resolveLocale(pref);
+  applyDocumentLang(resolvedLocale.value);
+}
+
+export function setResolvedLocale(locale: LocaleId) {
+  resolvedLocale.value = locale;
+  applyDocumentLang(locale);
+}
 
 export function t(key: MsgKey, vars?: Record<string, string | number>): string {
-  let out: string = zhCN[key];
+  const loc = resolvedLocale.value;
+  const table = catalogs[loc];
+  const fallback = catalogs["en-US"];
+  let out = table[key] || fallback[key] || fallback["err.generic"];
   if (!vars) return out;
   for (const [k, v] of Object.entries(vars)) {
     out = out.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
   }
   return out;
+}
+
+const GENERIC_CLIPBOARD = new Set([
+  enUS["overlay.genericClipboard"],
+  zhCN["overlay.genericClipboard"],
+]);
+const GENERIC_IMAGE = new Set([enUS["type.image"], zhCN["type.image"]]);
+const GENERIC_LOCAL = new Set([enUS["overlay.local"], zhCN["overlay.local"]]);
+
+export function displayTitle(title: string, primaryType?: string): string {
+  if (GENERIC_IMAGE.has(title)) return t("type.image");
+  if (GENERIC_CLIPBOARD.has(title)) {
+    return primaryType === "image" ? t("type.image") : t("overlay.genericClipboard");
+  }
+  return title;
+}
+
+export function displaySource(name: string | null | undefined): string {
+  if (!name || GENERIC_LOCAL.has(name)) return t("overlay.local");
+  return name;
 }

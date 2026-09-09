@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::clipboard;
 use crate::device;
+use crate::i18n;
 use crate::net;
 use crate::state::{self, AppState};
 use crate::types::{AppSettings, HistoryEntry, NearbyDevice, PairedDevice};
@@ -260,6 +261,7 @@ pub fn update_settings(
     cleanup_max_bytes: Option<u64>,
     cleanup_max_age_days: Option<Value>,
     overlay_shortcut: Option<String>,
+    locale: Option<String>,
 ) -> Result<AppSettings, String> {
     let mut settings = state
         .inner
@@ -289,9 +291,22 @@ pub fn update_settings(
             settings.overlay_shortcut = v;
         }
     }
+    let mut locale_changed = false;
+    if let Some(v) = locale {
+        let next = i18n::normalize_pref(&v);
+        if next != settings.locale {
+            settings.locale = next;
+            locale_changed = true;
+        }
+    }
     state.with_store(|s| s.save_settings(&settings))?;
     if let Ok(mut g) = state.inner.settings.lock() {
         *g = settings.clone();
+    }
+    if locale_changed {
+        let resolved = i18n::resolve(&settings.locale);
+        i18n::apply_native_ui(&app, resolved);
+        i18n::emit_locale_changed(&app, resolved);
     }
     Ok(settings)
 }

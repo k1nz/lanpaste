@@ -164,6 +164,12 @@ pub struct AppSettings {
     pub cleanup_max_bytes: u64,
     pub cleanup_max_age_days: Option<u32>,
     pub overlay_shortcut: String,
+    #[serde(default = "default_locale")]
+    pub locale: String,
+}
+
+fn default_locale() -> String {
+    "system".into()
 }
 
 impl Default for AppSettings {
@@ -174,6 +180,7 @@ impl Default for AppSettings {
             cleanup_max_bytes: DEFAULT_CLEANUP_MAX_BYTES,
             cleanup_max_age_days: None,
             overlay_shortcut: DEFAULT_SHORTCUT.to_string(),
+            locale: default_locale(),
         }
     }
 }

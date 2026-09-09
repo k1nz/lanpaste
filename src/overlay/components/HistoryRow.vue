@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { HistoryEntry, TransferProgressPayload } from "../../shared/types";
 import { formatBytes, hasImagePreview, relativeTime } from "../../shared/format";
-import { t } from "../../shared/i18n";
+import { displayTitle, t } from "../../shared/i18n";
 import { mediaSrc } from "../../shared/ipc";
 import { TYPE_ICONS } from "../typeMeta";
 
@@ -87,7 +87,7 @@ function onContext(ev: MouseEvent) {
         :weight="selected ? 'fill' : 'regular'"
       />
     </span>
-    <span class="title">{{ item.title }}</span>
+    <span class="title">{{ displayTitle(item.title, item.primaryType) }}</span>
     <span v-if="item.needsFileDownload && !showBar" class="meta pending">
       {{ item.preview.fileSize != null ? formatBytes(item.preview.fileSize) : t("overlay.pendingDownload") }}
     </span>
