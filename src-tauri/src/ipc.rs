@@ -125,18 +125,23 @@ pub fn delete_entry(state: State<AppState>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn reveal_in_finder(state: State<AppState>, id: String) -> Result<(), String> {
-    let items = state.with_store(|s| s.get_items(&id))?;
-    let path = items.iter().find_map(|i| {
-        i.blob_hash.as_ref().and_then(|h| {
-            let p = state.with_store(|s| Ok(s.blob_path(h))).ok()?;
-            if p.exists() {
-                Some(p)
-            } else {
-                None
+    let path = state.with_store(|s| {
+        let items = s.get_items(&id)?;
+        if let Some(file) = items.iter().find(|i| i.item_type == "file") {
+            if let Some(h) = &file.blob_hash {
+                return s.named_blob_path(h, file.file_name.as_deref());
             }
-        })
-    });
-    let path = path.ok_or_else(|| "没有可显示的文件".to_string())?;
+        }
+        items
+            .iter()
+            .find_map(|i| {
+                i.blob_hash.as_ref().map(|h| s.blob_path(h)).filter(|p| p.exists())
+            })
+            .ok_or_else(|| "没有可显示的文件".to_string())
+    })?;
+    if !path.exists() {
+        return Err("没有可显示的文件".into());
+    }
     std::process::Command::new("open")
         .args(["-R", &path.to_string_lossy()])
         .status()

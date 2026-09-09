@@ -368,7 +368,12 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
         let (hash, size) = s.put_blob(&data)?;
         let mut preview: crate::types::Preview =
             serde_json::from_str(&pb.preview_json).unwrap_or_default();
-        preview.path = Some(s.blob_path(&hash).to_string_lossy().into_owned());
+        preview.path = Some(
+            s.named_blob_path(&hash, file.file_name.as_deref())
+                .unwrap_or_else(|_| s.blob_path(&hash))
+                .to_string_lossy()
+                .into_owned(),
+        );
         preview.file_size = Some(size);
         let preview_json = serde_json::to_string(&preview).unwrap_or_else(|_| "{}".into());
         s.attach_blob_to_file_item(pasteboard_id, &hash, size, &preview_json)?;

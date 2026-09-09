@@ -278,7 +278,11 @@ fn ingest_remote(
                         }
                     }
                 }
-                "text" => preview.text = it.text.clone(),
+                "text" => {
+                    if !parsed.items.iter().any(|i| i.item_type == "file") {
+                        preview.text = it.text.clone();
+                    }
+                }
                 "html" => preview.html = it.html.clone(),
                 "url" => preview.url = it.url.clone(),
                 "color" => preview.color = it.color.clone(),

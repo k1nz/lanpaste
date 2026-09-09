@@ -491,6 +491,7 @@ impl Store {
         for hash in dead {
             let path = self.blob_dir.join(&hash);
             let _ = fs::remove_file(path);
+            let _ = fs::remove_dir_all(self.blob_dir.join("named").join(&hash));
             self.conn
                 .execute("DELETE FROM blobs WHERE hash = ?1", params![hash])
                 .map_err(|e| format!("gc del: {e}"))?;
@@ -561,6 +562,30 @@ impl Store {
 
     pub fn blob_path(&self, hash: &str) -> PathBuf {
         self.blob_dir.join(hash)
+    }
+
+    /// Clipboard and Finder need a real filename + extension. Blobs stay
+    /// content-addressed; this hardlinks (or copies) to `named/{hash}/{name}`.
+    pub fn named_blob_path(&self, hash: &str, file_name: Option<&str>) -> Result<PathBuf, String> {
+        let src = self.blob_path(hash);
+        if !src.exists() {
+            return Err("source_file_gone".into());
+        }
+        let name = sanitize_file_name(file_name);
+        let dir = self.blob_dir.join("named").join(hash);
+        fs::create_dir_all(&dir).map_err(|e| format!("named dir: {e}"))?;
+        let dest = dir.join(&name);
+        if dest.exists() {
+            return Ok(dest);
+        }
+        match fs::hard_link(&src, &dest) {
+            Ok(()) => Ok(dest),
+            Err(_) if dest.exists() => Ok(dest),
+            Err(_) => {
+                fs::copy(&src, &dest).map_err(|e| format!("named copy: {e}"))?;
+                Ok(dest)
+            }
+        }
     }
 
     pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, String> {
@@ -892,6 +917,33 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+pub fn sanitize_file_name(name: Option<&str>) -> String {
+    let raw = name.unwrap_or("").trim();
+    let base = Path::new(raw)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| raw.to_string());
+    let mut out = String::new();
+    for c in base.chars() {
+        if c.is_control()
+            || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0')
+        {
+            continue;
+        }
+        out.push(c);
+        if out.chars().count() >= 255 {
+            break;
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() || out == "." || out == ".." {
+        "file".into()
+    } else {
+        out
+    }
+}
+
 pub fn content_hash_for(parts: &[(String, Vec<u8>)]) -> String {
     let mut hasher = Sha256::new();
     for (ty, bytes) in parts {
@@ -975,5 +1027,33 @@ mod tests {
         assert_eq!(by_item.blob_hash.as_deref(), Some(hash.as_str()));
         assert_eq!(by_pb.id, "item-1");
         assert!(store.find_file_for_download("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn sanitize_keeps_unicode_basename_and_extension() {
+        assert_eq!(
+            sanitize_file_name(Some("新增 文本文档.txt")),
+            "新增 文本文档.txt"
+        );
+        assert_eq!(sanitize_file_name(Some("a/../b.txt")), "b.txt");
+        assert_eq!(sanitize_file_name(Some("")), "file");
+        assert_eq!(sanitize_file_name(None), "file");
+    }
+
+    #[test]
+    fn named_blob_path_uses_original_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let src = dir.path().join("新增 文本文档.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let (hash, _) = store.ingest_file(&src).unwrap();
+        let named = store
+            .named_blob_path(&hash, Some("新增 文本文档.txt"))
+            .unwrap();
+        assert_eq!(
+            named.file_name().unwrap().to_string_lossy(),
+            "新增 文本文档.txt"
+        );
+        assert_eq!(std::fs::read(&named).unwrap(), b"hello");
     }
 }

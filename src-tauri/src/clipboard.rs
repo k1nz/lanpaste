@@ -164,8 +164,16 @@ pub fn ingest_captured(
                     stored.download_token = Some(hex::encode(rand_bytes(16)));
                     preview.file_name = Some(name.clone());
                     preview.file_size = Some(size);
-                    preview.path = Some(store.blob_path(&hash).to_string_lossy().into_owned());
-                    title = name;
+                    preview.path = Some(
+                        store
+                            .named_blob_path(&hash, Some(&name))
+                            .unwrap_or_else(|_| store.blob_path(&hash))
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                    if ptype == PasteType::File {
+                        title = name;
+                    }
                     total_bytes += size;
                 }
             }
@@ -186,41 +194,55 @@ pub fn ingest_captured(
                             base64::engine::general_purpose::STANDARD.encode(bytes)
                         ));
                     }
-                    title = "图片".into();
+                    if ptype == PasteType::Image {
+                        title = "图片".into();
+                    }
                     total_bytes += size;
                 }
             }
             PasteType::Html => {
                 if let Some(html) = &cap.html {
                     preview.html = Some(truncate_title(html, 400));
-                    title = truncate_title(html, 80);
+                    if ptype == PasteType::Html {
+                        title = truncate_title(html, 80);
+                    }
                     total_bytes += html.len() as u64;
                 }
             }
             PasteType::Rtf => {
                 if let Some(rtf) = &cap.rtf {
-                    title = "RTF".into();
+                    if ptype == PasteType::Rtf {
+                        title = "RTF".into();
+                    }
                     total_bytes += rtf.len() as u64;
                 }
             }
             PasteType::Url => {
                 if let Some(url) = &cap.url {
                     preview.url = Some(url.clone());
-                    title = truncate_title(url, 80);
+                    if ptype == PasteType::Url {
+                        title = truncate_title(url, 80);
+                    }
                     total_bytes += url.len() as u64;
                 }
             }
             PasteType::Color => {
                 if let Some(c) = &cap.color {
                     preview.color = Some(c.clone());
-                    title = c.clone();
+                    if ptype == PasteType::Color {
+                        title = c.clone();
+                    }
                     total_bytes += c.len() as u64;
                 }
             }
             PasteType::Text => {
                 if let Some(t) = &cap.text {
-                    preview.text = Some(truncate_title(t, 400));
-                    title = truncate_title(t, 80);
+                    if ptype != PasteType::File {
+                        preview.text = Some(truncate_title(t, 400));
+                    }
+                    if ptype == PasteType::Text {
+                        title = truncate_title(t, 80);
+                    }
                     total_bytes += t.len() as u64;
                 }
             }
@@ -228,7 +250,7 @@ pub fn ingest_captured(
         items.push(stored);
     }
 
-    if preview.text.is_none() {
+    if preview.text.is_none() && ptype != PasteType::File && ptype != PasteType::Image {
         if let Some(t) = captured.items.iter().find_map(|i| i.text.clone()) {
             preview.text = Some(truncate_title(&t, 400));
         }
@@ -301,11 +323,21 @@ pub fn payload_from_store(store: &Store, pasteboard_id: &str) -> Result<WritePay
             }
             "file" => {
                 if let Some(hash) = item.blob_hash {
-                    payload.file_paths.push(store.blob_path(&hash));
+                    let path = store
+                        .named_blob_path(&hash, item.file_name.as_deref())
+                        .unwrap_or_else(|_| store.blob_path(&hash));
+                    payload.file_paths.push(path);
                 }
             }
             _ => {}
         }
+    }
+    if !payload.file_paths.is_empty() {
+        payload.text = None;
+        payload.html = None;
+        payload.rtf = None;
+        payload.url = None;
+        payload.image_png = None;
     }
     Ok(payload)
 }
@@ -1371,5 +1403,61 @@ mod tests {
         assert!(pasteboard_has_file(&items));
         let empty: Vec<CapturedItem> = Vec::new();
         assert!(!pasteboard_has_file(&empty));
+    }
+
+    fn cap_file(path: PathBuf) -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::File,
+            text: None,
+            html: None,
+            rtf: None,
+            url: None,
+            color: None,
+            image: None,
+            file_path: Some(path),
+        }
+    }
+
+    fn cap_text(text: &str) -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::Text,
+            text: Some(text.into()),
+            html: None,
+            rtf: None,
+            url: None,
+            color: None,
+            image: None,
+            file_path: None,
+        }
+    }
+
+    #[test]
+    fn file_ingest_keeps_name_despite_text_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let src = dir.path().join("新增 文本文档.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![
+                cap_file(src),
+                cap_text(r"C:\Users\me\Desktop\新增 文本文档.txt"),
+            ],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+            .unwrap()
+            .unwrap();
+        let pb = store.get_pasteboard(&result.id).unwrap().unwrap();
+        assert_eq!(pb.primary_type, "file");
+        assert_eq!(pb.title, "新增 文本文档.txt");
+        let preview: crate::types::Preview =
+            serde_json::from_str(&pb.preview_json).unwrap();
+        assert_eq!(preview.file_name.as_deref(), Some("新增 文本文档.txt"));
+        assert!(preview.text.is_none());
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        assert_eq!(
+            payload.file_paths[0].file_name().unwrap().to_string_lossy(),
+            "新增 文本文档.txt"
+        );
+        assert!(payload.text.is_none());
     }
 }

@@ -41,9 +41,6 @@ const transferring = computed(() => {
       <div v-else-if="entry.primaryType === 'url' && entry.preview.url" class="text-block url">
         {{ entry.preview.url }}
       </div>
-      <pre v-else-if="entry.preview.text || entry.preview.html" class="text-block">{{
-        entry.preview.text || entry.preview.html
-      }}</pre>
       <div v-else-if="entry.primaryType === 'file'" class="file-block">
         <p class="file-name">{{ entry.preview.fileName || entry.title }}</p>
         <p v-if="entry.preview.fileSize != null" class="muted">
@@ -51,6 +48,9 @@ const transferring = computed(() => {
         </p>
         <p v-if="entry.needsFileDownload" class="muted">{{ t("overlay.pendingDownload") }}</p>
       </div>
+      <pre v-else-if="entry.preview.text || entry.preview.html" class="text-block">{{
+        entry.preview.text || entry.preview.html
+      }}</pre>
       <p v-else class="muted">{{ t("overlay.noPreview") }}</p>
     </div>
 
