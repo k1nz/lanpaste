@@ -96,7 +96,7 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
 
 <template>
   <div
-    class="list-scroll"
+    class="list-scroll lp-scroll"
     :ref="onListScrollSetup"
     role="listbox"
     :aria-activedescendant="selectedId ? `row-${selectedId}` : undefined"
@@ -150,18 +150,9 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
 
 <style scoped>
 .list-scroll {
+  min-height: 0;
   height: 100%;
-  overflow: auto;
   padding: 0 8px 8px;
-}
-
-.list-scroll::-webkit-scrollbar {
-  width: 8px;
-}
-
-.list-scroll::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 99px;
 }
 
 .group-label {

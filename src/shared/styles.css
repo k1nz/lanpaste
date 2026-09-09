@@ -168,6 +168,25 @@ textarea {
   transition: width 160ms ease;
 }
 
+.lp-scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.lp-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.lp-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lp-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 99px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .progress-fill {
     transition: none;

@@ -29,7 +29,7 @@ const transferring = computed(() => {
 
 <template>
   <aside class="preview" v-if="entry">
-    <div class="preview-body">
+    <div class="preview-body lp-scroll">
       <div v-if="entry.primaryType === 'color' && entry.preview.color" class="color-block">
         <div class="color-swatch" :style="{ background: entry.preview.color }" />
         <code>{{ entry.preview.color }}</code>
@@ -98,8 +98,10 @@ const transferring = computed(() => {
 .preview {
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   border-left: 1px solid var(--color-border);
   padding: var(--space-lg);
   gap: var(--space-lg);
@@ -113,7 +115,6 @@ const transferring = computed(() => {
 .preview-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
 }
 
 .muted {
@@ -160,6 +161,10 @@ const transferring = computed(() => {
 .file-name {
   margin: 0 0 var(--space-sm);
   font-size: 15px;
+}
+
+.info {
+  flex-shrink: 0;
 }
 
 .info h3 {

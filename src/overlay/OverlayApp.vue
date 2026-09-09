@@ -495,10 +495,16 @@ onUnmounted(() => {
 }
 
 .split {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
+}
+
+.split > * {
+  min-width: 0;
+  min-height: 0;
 }
 
 .banner {

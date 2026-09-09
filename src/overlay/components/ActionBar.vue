@@ -45,6 +45,8 @@ const pasteLabel = computed(() =>
 
 <style scoped>
 .bar {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--space-md);
