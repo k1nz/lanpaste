@@ -170,6 +170,7 @@ fn start_clipboard_watcher(state: AppState) {
         let mut tick = tokio::time::interval(Duration::from_millis(400));
         loop {
             tick.tick().await;
+            clipboard::track_frontmost();
             let count = match clipboard::pasteboard_change_count() {
                 Ok(c) => c,
                 Err(_) => continue,

@@ -46,12 +46,26 @@ pub async fn paste_entry(app: AppHandle, state: State<'_, AppState>, id: String)
         .filter(|n| !n.is_empty());
     #[cfg(target_os = "windows")]
     {
-        // Restore the previous window while we still own foreground, then hide.
-        let _ = clipboard::activate_app_named(target.as_deref().unwrap_or(""));
-        let _ = state::hide_window(&app, "overlay");
-        std::thread::sleep(std::time::Duration::from_millis(80));
-        clipboard::simulate_paste()?;
-        return Ok(());
+        let _ = target;
+        // Hide first so Windows can restore the previous app, then paste on the UI thread.
+        // SetForegroundWindow from a Tauri worker is ignored by the foreground lock.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hide_app = app.clone();
+        app.run_on_main_thread(move || {
+            let _ = state::hide_window(&hide_app, "overlay");
+            let _ = tx.send(());
+        })
+        .map_err(|e| e.to_string())?;
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(clipboard::activate_and_paste());
+        })
+        .map_err(|e| e.to_string())?;
+        return rx
+            .recv_timeout(std::time::Duration::from_millis(800))
+            .map_err(|_| "粘贴超时".to_string())?;
     }
     #[cfg(not(target_os = "windows"))]
     {

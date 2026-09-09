@@ -321,6 +321,24 @@ pub fn remember_frontmost() -> Result<String, String> {
     }
 }
 
+pub fn track_frontmost() {
+    #[cfg(target_os = "windows")]
+    {
+        win32::track_frontmost();
+    }
+}
+
+pub fn activate_and_paste() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        win32::activate_and_paste()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        simulate_paste()
+    }
+}
+
 pub fn frontmost_app_name() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
@@ -673,18 +691,19 @@ mod win32 {
     };
     use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
     use windows::Win32::System::Threading::{
-        AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
+        AttachThreadInput, GetCurrentProcessId, OpenProcess,
         QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_MENU,
+        MapVirtualKeyW, SendInput, SetActiveWindow, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD,
+        KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_LCONTROL,
         VK_V,
     };
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
     use windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-        IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetForegroundWindow,
+        GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+        SetForegroundWindow, ShowWindow, SwitchToThisWindow, ASFW_ANY, GA_ROOT, SW_RESTORE,
     };
 
     struct PrevTarget {
@@ -779,16 +798,70 @@ mod win32 {
         }
     }
 
-    pub fn remember_frontmost() -> Result<String, String> {
-        let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd_null(hwnd) || is_own_process(hwnd) {
-            return Ok(prev_lock().name.clone());
+    fn class_name(hwnd: HWND) -> String {
+        unsafe {
+            let mut buf = [0u16; 256];
+            let n = GetClassNameW(hwnd, &mut buf);
+            if n <= 0 {
+                return String::new();
+            }
+            String::from_utf16_lossy(&buf[..n as usize])
+        }
+    }
+
+    fn top_level(hwnd: HWND) -> HWND {
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        if hwnd_null(root) {
+            hwnd
+        } else {
+            root
+        }
+    }
+
+    fn is_shell_window(hwnd: HWND) -> bool {
+        let class = class_name(hwnd);
+        matches!(
+            class.as_str(),
+            "Shell_TrayWnd"
+                | "Shell_SecondaryTrayWnd"
+                | "NotifyIconOverflowWindow"
+                | "Progman"
+                | "WorkerW"
+                | "ForegroundStaging"
+                | "Windows.Internal.Shell.TabProxyWindow"
+                | "#32769"
+        )
+    }
+
+    fn is_usable_target(hwnd: HWND) -> bool {
+        unsafe {
+            if hwnd_null(hwnd) || !IsWindow(Some(hwnd)).as_bool() {
+                return false;
+            }
+            if !IsWindowVisible(hwnd).as_bool() {
+                return false;
+            }
+            if is_own_process(hwnd) || is_shell_window(hwnd) {
+                return false;
+            }
+            true
+        }
+    }
+
+    pub fn track_frontmost() {
+        let hwnd = top_level(unsafe { GetForegroundWindow() });
+        if !is_usable_target(hwnd) {
+            return;
         }
         let name = process_name(hwnd);
         let mut g = prev_lock();
         g.hwnd = hwnd_as_isize(hwnd);
-        g.name = name.clone();
-        Ok(name)
+        g.name = name;
+    }
+
+    pub fn remember_frontmost() -> Result<String, String> {
+        track_frontmost();
+        Ok(prev_lock().name.clone())
     }
 
     pub fn frontmost_app_name() -> Result<String, String> {
@@ -812,33 +885,32 @@ mod win32 {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
 
-            // Pressing Alt briefly lets this process call SetForegroundWindow.
-            let _ = send_keys(&[(VK_MENU, false, false), (VK_MENU, true, false)]);
-
             let fg = GetForegroundWindow();
-            let current_tid = GetCurrentThreadId();
-            let mut fg_tid = 0u32;
-            if !hwnd_null(fg) {
-                fg_tid = GetWindowThreadProcessId(fg, None);
+            if !hwnd_null(fg) && hwnd_as_isize(fg) == hwnd_as_isize(hwnd) {
+                return;
             }
+
+            // Attach the *current foreground* thread to the target, not this worker.
+            let fg_tid = if hwnd_null(fg) {
+                0
+            } else {
+                GetWindowThreadProcessId(fg, None)
+            };
             let target_tid = GetWindowThreadProcessId(hwnd, None);
+            let attached = fg_tid != 0
+                && target_tid != 0
+                && fg_tid != target_tid
+                && AttachThreadInput(fg_tid, target_tid, true).as_bool();
 
-            let attached_fg = fg_tid != 0
-                && fg_tid != current_tid
-                && AttachThreadInput(current_tid, fg_tid, true).as_bool();
-            let attached_target = target_tid != 0
-                && target_tid != current_tid
-                && target_tid != fg_tid
-                && AttachThreadInput(current_tid, target_tid, true).as_bool();
-
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
+            SwitchToThisWindow(hwnd, true);
             let _ = BringWindowToTop(hwnd);
             let _ = SetForegroundWindow(hwnd);
+            let _ = SetActiveWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
 
-            if attached_target {
-                let _ = AttachThreadInput(current_tid, target_tid, false);
-            }
-            if attached_fg {
-                let _ = AttachThreadInput(current_tid, fg_tid, false);
+            if attached {
+                let _ = AttachThreadInput(fg_tid, target_tid, false);
             }
         }
     }
@@ -852,15 +924,17 @@ mod win32 {
         Ok(())
     }
 
-    fn key_input(vk: VIRTUAL_KEY, up: bool, extended: bool) -> INPUT {
-        let mut flags = if up {
+    pub fn activate_and_paste() -> Result<(), String> {
+        activate_remembered()?;
+        simulate_ctrl_v()
+    }
+
+    fn key_input(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+        let flags = if up {
             KEYEVENTF_KEYUP
         } else {
             KEYBD_EVENT_FLAGS(0)
         };
-        if extended {
-            flags |= KEYEVENTF_EXTENDEDKEY;
-        }
         let scan = unsafe { MapVirtualKeyW(u32::from(vk.0), MAPVK_VK_TO_VSC) } as u16;
         INPUT {
             r#type: INPUT_KEYBOARD,
@@ -876,11 +950,8 @@ mod win32 {
         }
     }
 
-    fn send_keys(keys: &[(VIRTUAL_KEY, bool, bool)]) -> Result<(), String> {
-        let inputs: Vec<INPUT> = keys
-            .iter()
-            .map(|(vk, up, ext)| key_input(*vk, *up, *ext))
-            .collect();
+    fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {
+        let inputs: Vec<INPUT> = keys.iter().map(|(vk, up)| key_input(*vk, *up)).collect();
         let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize != inputs.len() {
             return Err("无法发送按键".into());
@@ -890,10 +961,10 @@ mod win32 {
 
     pub fn simulate_ctrl_v() -> Result<(), String> {
         send_keys(&[
-            (VK_CONTROL, false, false),
-            (VK_V, false, false),
-            (VK_V, true, false),
-            (VK_CONTROL, true, false),
+            (VK_LCONTROL, false),
+            (VK_V, false),
+            (VK_V, true),
+            (VK_LCONTROL, true),
         ])
     }
 
