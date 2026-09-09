@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -40,6 +40,7 @@ pub struct Inner {
     pub handle: Mutex<Option<AppHandle>>,
     pub last_pairing_show: Mutex<Option<PairingShowPayload>>,
     pub last_pairing_input: Mutex<Option<PairingInputPayload>>,
+    pub overlay_blur_hide_at: Mutex<Option<Instant>>,
 }
 
 #[derive(Debug, Clone)]

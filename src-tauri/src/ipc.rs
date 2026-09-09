@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
@@ -314,8 +316,34 @@ pub fn show_overlay_window(app: &AppHandle, state: Option<&AppState>) -> Result<
             }
         }
     }
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut g) = state.inner.overlay_blur_hide_at.lock() {
+            *g = None;
+        }
+    }
     state::show_then_emit(app, "overlay", "overlay-shown", ());
     Ok(())
+}
+
+/// Hide the overlay shortly after it loses focus (click-away), but ignore
+/// transient unfocus that happens while the window is being shown.
+pub fn on_overlay_focus_lost(window: &tauri::Window) {
+    if window.label() != "overlay" {
+        return;
+    }
+    let window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        if window.is_focused().unwrap_or(false) || !window.is_visible().unwrap_or(false) {
+            return;
+        }
+        let _ = window.hide();
+        if let Some(state) = window.app_handle().try_state::<AppState>() {
+            if let Ok(mut g) = state.inner.overlay_blur_hide_at.lock() {
+                *g = Some(Instant::now());
+            }
+        }
+    });
 }
 
 pub fn toggle_overlay(app: &AppHandle) {
@@ -323,6 +351,14 @@ pub fn toggle_overlay(app: &AppHandle) {
         if w.is_visible().unwrap_or(false) {
             let _ = w.hide();
             return;
+        }
+    }
+    // Tray click first unfocuses the overlay; skip the immediate re-show.
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(g) = state.inner.overlay_blur_hide_at.lock() {
+            if g.is_some_and(|at| at.elapsed() < Duration::from_millis(280)) {
+                return;
+            }
         }
     }
     let _ = show_overlay_window(app, None);

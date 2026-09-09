@@ -48,11 +48,15 @@ pub fn run() {
             ipc::update_settings,
             ipc::frontmost_app_name,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            tauri::WindowEvent::Focused(false) => {
+                ipc::on_overlay_focus_lost(window);
+            }
+            _ => {}
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -89,6 +93,7 @@ pub fn run() {
                     handle: Mutex::new(Some(handle.clone())),
                     last_pairing_show: Mutex::new(None),
                     last_pairing_input: Mutex::new(None),
+                    overlay_blur_hide_at: Mutex::new(None),
                 }),
             };
             app.manage(state.clone());
