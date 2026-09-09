@@ -122,7 +122,8 @@ export function eventToShortcut(ev: KeyboardEvent): string | null {
   const hasPrimaryMod = ev.metaKey || ev.ctrlKey || ev.altKey;
   if (!hasPrimaryMod && !functionKey) return null;
   const parts: string[] = [];
-  if (ev.metaKey || ev.ctrlKey) parts.push("CommandOrControl");
+  if (ev.metaKey) parts.push("Command");
+  if (ev.ctrlKey) parts.push("Control");
   if (ev.altKey) parts.push("Option");
   if (ev.shiftKey) parts.push("Shift");
   parts.push(key);

@@ -6,8 +6,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use crate::types::{
-    AppSettings, HistoryEntry, PasteType, Preview, DEFAULT_AUTO_SYNC_MAX_BYTES,
-    DEFAULT_CLEANUP_MAX_BYTES, DEFAULT_CLEANUP_MAX_ITEMS, DEFAULT_SHORTCUT,
+    is_legacy_default_shortcut, AppSettings, HistoryEntry, PasteType, Preview,
+    DEFAULT_AUTO_SYNC_MAX_BYTES, DEFAULT_CLEANUP_MAX_BYTES, DEFAULT_CLEANUP_MAX_ITEMS,
+    DEFAULT_SHORTCUT,
 };
 
 pub struct Store {
@@ -759,7 +760,7 @@ impl Store {
             }
         }
         if let Some(v) = self.get_setting("overlayShortcut")? {
-            if !v.is_empty() && v != "CommandOrControl+Shift+V" {
+            if !v.is_empty() && !is_legacy_default_shortcut(&v) {
                 s.overlay_shortcut = v;
             }
         }

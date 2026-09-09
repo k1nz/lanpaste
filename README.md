@@ -9,7 +9,7 @@ npm install
 npx tauri dev
 ```
 
-Vite 在 **http://localhost:1480**。托盘常驻，默认快捷键 **⌥⇧V**。
+Vite 在 **http://localhost:1480**。托盘常驻，默认快捷键 macOS **⌥⇧V**，Windows **Ctrl+Shift+V**。
 
 规格：`docs/superpowers/specs/2026-09-07-lanpaste-design.md`  
 设计系统：`design-system/lanpaste/MASTER.md`

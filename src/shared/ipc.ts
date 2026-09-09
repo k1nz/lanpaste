@@ -7,12 +7,21 @@ import type {
   PasteType,
 } from "./types";
 
+function isApplePlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
+}
+
+export const DEFAULT_OVERLAY_SHORTCUT = isApplePlatform()
+  ? "Option+Shift+V"
+  : "Control+Shift+V";
+
 export const DEFAULT_SETTINGS: AppSettings = {
   autoSyncMaxBytes: 20 * 1024 * 1024,
   cleanupMaxItems: 500,
   cleanupMaxBytes: 1024 * 1024 * 1024,
   cleanupMaxAgeDays: null,
-  overlayShortcut: "Option+Shift+V",
+  overlayShortcut: DEFAULT_OVERLAY_SHORTCUT,
 };
 
 export async function invokeSafe<T>(

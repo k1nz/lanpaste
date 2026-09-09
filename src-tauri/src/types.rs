@@ -3,7 +3,22 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_AUTO_SYNC_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub const DEFAULT_CLEANUP_MAX_ITEMS: u64 = 500;
 pub const DEFAULT_CLEANUP_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 pub const DEFAULT_SHORTCUT: &str = "Option+Shift+V";
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_SHORTCUT: &str = "Control+Shift+V";
+
+pub fn is_legacy_default_shortcut(saved: &str) -> bool {
+    if saved == "CommandOrControl+Shift+V" {
+        return true;
+    }
+    #[cfg(not(target_os = "macos"))]
+    if saved == "Option+Shift+V" || saved == "Alt+Shift+V" {
+        return true;
+    }
+    false
+}
+
 pub const PAIR_TOKEN_TTL_MS: u64 = 60_000;
 /// Axum's default request body cap is 2MB. Images go out as base64 (~4/3), so
 /// this sits well above the 20MB auto-sync threshold while still bounding
