@@ -60,7 +60,15 @@ pub async fn paste_entry(app: AppHandle, state: State<'_, AppState>, id: String)
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(clipboard::activate_and_paste());
+            let _ = tx.send(clipboard::activate_app_named(""));
+        })
+        .map_err(|e| e.to_string())?;
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+        // Give the restored edit control time to take focus before Ctrl is held.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(clipboard::simulate_paste());
         })
         .map_err(|e| e.to_string())?;
         return rx

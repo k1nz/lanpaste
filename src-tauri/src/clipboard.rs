@@ -360,17 +360,6 @@ pub fn track_frontmost() {
     }
 }
 
-pub fn activate_and_paste() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        win32::activate_and_paste()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        simulate_paste()
-    }
-}
-
 pub fn frontmost_app_name() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
@@ -733,9 +722,8 @@ mod win32 {
         QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, SendInput, SetActiveWindow, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD,
-        KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_LCONTROL,
-        VK_V,
+        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_V,
     };
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -944,8 +932,6 @@ mod win32 {
             SwitchToThisWindow(hwnd, true);
             let _ = BringWindowToTop(hwnd);
             let _ = SetForegroundWindow(hwnd);
-            let _ = SetActiveWindow(hwnd);
-            let _ = SetFocus(Some(hwnd));
 
             if attached {
                 let _ = AttachThreadInput(fg_tid, target_tid, false);
@@ -962,18 +948,12 @@ mod win32 {
         Ok(())
     }
 
-    pub fn activate_and_paste() -> Result<(), String> {
-        activate_remembered()?;
-        simulate_ctrl_v()
-    }
-
-    fn key_input(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+    fn key_input(vk: VIRTUAL_KEY, scan: u16, up: bool) -> INPUT {
         let flags = if up {
             KEYEVENTF_KEYUP
         } else {
             KEYBD_EVENT_FLAGS(0)
         };
-        let scan = unsafe { MapVirtualKeyW(u32::from(vk.0), MAPVK_VK_TO_VSC) } as u16;
         INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -988,9 +968,8 @@ mod win32 {
         }
     }
 
-    fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {
-        let inputs: Vec<INPUT> = keys.iter().map(|(vk, up)| key_input(*vk, *up)).collect();
-        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    fn send_inputs(inputs: &[INPUT]) -> Result<(), String> {
+        let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize != inputs.len() {
             return Err("无法发送按键".into());
         }
@@ -998,12 +977,18 @@ mod win32 {
     }
 
     pub fn simulate_ctrl_v() -> Result<(), String> {
-        send_keys(&[
-            (VK_LCONTROL, false),
-            (VK_V, false),
-            (VK_V, true),
-            (VK_LCONTROL, true),
-        ])
+        // VK_CONTROL + left-Ctrl scan (0x1D). VK_LCONTROL alone often arrives as a
+        // plain "v" because ToUnicode/GetKeyState look at VK_CONTROL.
+        const SCAN_LCTRL: u16 = 0x1D;
+        let scan_v = unsafe { MapVirtualKeyW(u32::from(VK_V.0), MAPVK_VK_TO_VSC) } as u16;
+        send_inputs(&[key_input(VK_CONTROL, SCAN_LCTRL, false)])?;
+        std::thread::sleep(Duration::from_millis(15));
+        send_inputs(&[
+            key_input(VK_V, scan_v, false),
+            key_input(VK_V, scan_v, true),
+        ])?;
+        std::thread::sleep(Duration::from_millis(10));
+        send_inputs(&[key_input(VK_CONTROL, SCAN_LCTRL, true)])
     }
 
     fn with_clipboard<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
