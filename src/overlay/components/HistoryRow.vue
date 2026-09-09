@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { HistoryEntry, TransferProgressPayload } from "../../shared/types";
-import { formatBytes, relativeTime } from "../../shared/format";
+import { formatBytes, hasImagePreview, relativeTime } from "../../shared/format";
 import { t } from "../../shared/i18n";
 import { mediaSrc } from "../../shared/ipc";
 import { TYPE_ICONS } from "../typeMeta";
@@ -18,9 +18,17 @@ const emit = defineEmits<{
   activate: [id: string];
 }>();
 
-const icon = computed(() => TYPE_ICONS[props.item.primaryType]);
+const icon = computed(() =>
+  hasImagePreview(props.item) ? TYPE_ICONS.image : TYPE_ICONS[props.item.primaryType],
+);
 const time = computed(() => relativeTime(props.item.copiedAt));
-const thumb = computed(() => mediaSrc(props.item.preview.imageThumb));
+const thumbFailed = ref(false);
+const thumb = computed(() => {
+  if (props.item.preview.imageThumb) return mediaSrc(props.item.preview.imageThumb);
+  if (hasImagePreview(props.item)) return mediaSrc(props.item.preview.path);
+  return undefined;
+});
+const showThumb = computed(() => Boolean(thumb.value) && !thumbFailed.value);
 const ratio = computed(() => {
   if (!props.progress || props.progress.id !== props.item.id || props.progress.total <= 0) {
     return 0;
@@ -31,6 +39,13 @@ const showBar = computed(
   () =>
     props.item.fileDownloadState === "downloading" ||
     (props.progress && props.progress.id === props.item.id && ratio.value > 0 && ratio.value < 1),
+);
+
+watch(
+  () => [props.item.id, thumb.value],
+  () => {
+    thumbFailed.value = false;
+  },
 );
 
 function onContext(ev: MouseEvent) {
@@ -52,10 +67,13 @@ function onContext(ev: MouseEvent) {
   >
     <span class="glyph">
       <img
-        v-if="item.primaryType === 'image' && thumb"
+        v-if="showThumb"
         class="thumb"
         :src="thumb"
         alt=""
+        draggable="false"
+        decoding="async"
+        @error="thumbFailed = true"
       />
       <span
         v-else-if="item.primaryType === 'color' && item.preview.color"
@@ -108,17 +126,23 @@ function onContext(ev: MouseEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
   color: inherit;
 }
 
 .thumb {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   object-fit: cover;
-  border-radius: 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.row.selected .thumb {
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .swatch {

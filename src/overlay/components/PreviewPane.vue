@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { HistoryEntry, TransferProgressPayload } from "../../shared/types";
-import { formatBytes, typeLabel } from "../../shared/format";
+import { formatBytes, hasImagePreview, typeLabel } from "../../shared/format";
 import { t } from "../../shared/i18n";
 import { mediaSrc } from "../../shared/ipc";
 
@@ -10,7 +10,11 @@ const props = defineProps<{
   progress: TransferProgressPayload | null;
 }>();
 
-const thumb = computed(() => mediaSrc(props.entry?.preview.imageThumb));
+const imageSrc = computed(() => {
+  const e = props.entry;
+  if (!e || !hasImagePreview(e)) return undefined;
+  return mediaSrc(e.preview.path) || mediaSrc(e.preview.imageThumb);
+});
 const ratio = computed(() => {
   const p = props.progress;
   const e = props.entry;
@@ -34,9 +38,11 @@ const transferring = computed(() => {
         <div class="color-swatch" :style="{ background: entry.preview.color }" />
         <code>{{ entry.preview.color }}</code>
       </div>
-      <div v-else-if="entry.primaryType === 'image'" class="image-block">
-        <img v-if="thumb" :src="thumb" :alt="entry.title" />
-        <p v-else>{{ t("overlay.noPreview") }}</p>
+      <div v-else-if="imageSrc" class="image-block">
+        <img :src="imageSrc" :alt="entry.title" />
+        <p v-if="entry.primaryType === 'file'" class="file-name">
+          {{ entry.preview.fileName || entry.title }}
+        </p>
       </div>
       <div v-else-if="entry.primaryType === 'url' && entry.preview.url" class="text-block url">
         {{ entry.preview.url }}
@@ -74,7 +80,7 @@ const transferring = computed(() => {
           <dt>{{ t("overlay.type") }}</dt>
           <dd>{{ typeLabel(entry.primaryType) }}</dd>
         </div>
-        <div v-if="entry.preview.path">
+        <div v-if="entry.primaryType === 'file' && entry.preview.path">
           <dt>{{ t("overlay.path") }}</dt>
           <dd class="mono">{{ entry.preview.path }}</dd>
         </div>
@@ -140,6 +146,12 @@ const transferring = computed(() => {
   font-family: var(--font-mono);
   font-size: 12px;
   word-break: break-all;
+}
+
+.image-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }
 
 .image-block img {

@@ -375,6 +375,11 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
                 .into_owned(),
         );
         preview.file_size = Some(size);
+        if crate::clipboard::looks_like_image_name(file.file_name.as_deref().unwrap_or(""))
+            || crate::clipboard::looks_like_image_magic(&data)
+        {
+            crate::clipboard::apply_image_thumb(&mut preview, &data);
+        }
         let preview_json = serde_json::to_string(&preview).unwrap_or_else(|_| "{}".into());
         s.attach_blob_to_file_item(pasteboard_id, &hash, size, &preview_json)?;
         Ok(())

@@ -115,7 +115,7 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
         <HistoryRow
           v-for="item in group.items"
           :key="item.id"
-          v-memo="[item.id, item.id === selectedId, item.title, item.fileDownloadState, progress?.id === item.id ? progress.received : 0]"
+          v-memo="[item.id, item.id === selectedId, item.title, item.fileDownloadState, item.preview.imageThumb, progress?.id === item.id ? progress.received : 0]"
           :item="item"
           :selected="item.id === selectedId"
           :progress="progress"
@@ -134,7 +134,7 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
           </div>
           <HistoryRow
             v-else-if="laidRow.row.kind === 'item'"
-            v-memo="[laidRow.row.item.id, laidRow.row.item.id === selectedId, laidRow.row.item.title, laidRow.row.item.fileDownloadState, progress?.id === laidRow.row.item.id ? progress.received : 0]"
+            v-memo="[laidRow.row.item.id, laidRow.row.item.id === selectedId, laidRow.row.item.title, laidRow.row.item.fileDownloadState, laidRow.row.item.preview.imageThumb, progress?.id === laidRow.row.item.id ? progress.received : 0]"
             :item="laidRow.row.item"
             :selected="laidRow.row.item.id === selectedId"
             :progress="progress"

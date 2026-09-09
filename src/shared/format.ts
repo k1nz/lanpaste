@@ -1,4 +1,4 @@
-import type { PasteType } from "./types";
+import type { HistoryEntry, PasteType } from "./types";
 import { t, type MsgKey } from "./i18n";
 
 export function toMs(ts: number): number {
@@ -133,6 +133,24 @@ export function eventToShortcut(ev: KeyboardEvent): string | null {
 export function typeLabel(type: PasteType): string {
   const key = `type.${type}` as MsgKey;
   return t(key);
+}
+
+const IMAGE_FILE_RE = /\.(png|jpe?g|gif|tiff?|bmp|webp|ico|heic|heif|svg)$/i;
+
+export function isImageFileName(name?: string | null): boolean {
+  if (!name) return false;
+  const base = name.split(/[/\\]/).pop() ?? name;
+  return IMAGE_FILE_RE.test(base);
+}
+
+export function hasImagePreview(entry: HistoryEntry): boolean {
+  if (entry.primaryType === "image") return true;
+  if (entry.preview.imageThumb) return true;
+  return (
+    isImageFileName(entry.preview.fileName) ||
+    isImageFileName(entry.title) ||
+    isImageFileName(entry.preview.path)
+  );
 }
 
 export function prefersReducedMotion(): boolean {

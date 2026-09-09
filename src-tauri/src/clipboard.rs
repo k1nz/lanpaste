@@ -1,8 +1,10 @@
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
+use image::{DynamicImage, ImageFormat, ImageReader};
 use sha2::{Digest, Sha256};
 
 use crate::store::{content_hash_for, now_ms, Store, StoredItem, StoredPasteboard};
@@ -182,6 +184,179 @@ pub fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
+const IMAGE_THUMB_EDGE: u32 = 96;
+const INLINE_IMAGE_MAX: usize = 80 * 1024;
+const IMAGE_THUMB_MAX_FILE: u64 = 40 * 1024 * 1024;
+const IMAGE_FILE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "tif", "tiff", "bmp", "webp", "ico", "heic", "heif", "svg",
+];
+
+pub fn image_dimensions_any(data: &[u8]) -> Option<(u32, u32)> {
+    png_dimensions(data).or_else(|| {
+        ImageReader::new(Cursor::new(data))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()
+    })
+}
+
+pub fn looks_like_image_name(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| IMAGE_FILE_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+        .unwrap_or(false)
+}
+
+pub fn looks_like_image_magic(bytes: &[u8]) -> bool {
+    sniff_image_mime_opt(bytes).is_some()
+}
+
+pub fn file_looks_like_image(path: &Path) -> bool {
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(looks_like_image_name)
+    {
+        return true;
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 16];
+    let Ok(n) = f.read(&mut buf) else {
+        return false;
+    };
+    looks_like_image_magic(&buf[..n])
+}
+
+fn sniff_image_mime_opt(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 8 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        Some("image/jpeg")
+    } else if bytes.len() >= 6 && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
+        Some("image/gif")
+    } else if bytes.len() >= 4
+        && ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00)
+            || (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A))
+    {
+        Some("image/tiff")
+    } else if bytes.len() >= 2 && bytes.starts_with(b"BM") {
+        Some("image/bmp")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+fn sniff_image_mime(bytes: &[u8]) -> &'static str {
+    sniff_image_mime_opt(bytes).unwrap_or("image/png")
+}
+
+pub fn make_image_thumb_data_url(bytes: &[u8]) -> Option<String> {
+    let img = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let thumb = img.thumbnail(IMAGE_THUMB_EDGE, IMAGE_THUMB_EDGE);
+    encode_thumb_data_url(&thumb)
+}
+
+fn encode_thumb_data_url(img: &DynamicImage) -> Option<String> {
+    let mut buf = Vec::new();
+    if img.color().has_alpha() {
+        img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
+            .ok()?;
+        Some(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buf)
+        ))
+    } else {
+        DynamicImage::ImageRgb8(img.to_rgb8())
+            .write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
+            .ok()?;
+        Some(format!(
+            "data:image/jpeg;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buf)
+        ))
+    }
+}
+
+/// Compact list thumbnail + dimensions. Does not rewrite `preview.path`.
+pub fn apply_image_thumb(preview: &mut Preview, bytes: &[u8]) {
+    if let Some((w, h)) = image_dimensions_any(bytes) {
+        preview.width = Some(w);
+        preview.height = Some(h);
+    }
+    if (bytes.len() as u64) > IMAGE_THUMB_MAX_FILE {
+        return;
+    }
+    preview.image_thumb = make_image_thumb_data_url(bytes).or_else(|| {
+        if bytes.len() <= INLINE_IMAGE_MAX {
+            Some(format!(
+                "data:{};base64,{}",
+                sniff_image_mime(bytes),
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            ))
+        } else {
+            preview.path.clone()
+        }
+    });
+}
+
+pub fn apply_image_thumb_from_path(preview: &mut Preview, path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() == 0 {
+        return;
+    }
+    if meta.len() > IMAGE_THUMB_MAX_FILE {
+        return;
+    }
+    match ImageReader::open(path)
+        .ok()
+        .and_then(|r| r.with_guessed_format().ok())
+        .and_then(|r| r.decode().ok())
+    {
+        Some(img) => {
+            preview.width = Some(img.width());
+            preview.height = Some(img.height());
+            preview.image_thumb =
+                encode_thumb_data_url(&img.thumbnail(IMAGE_THUMB_EDGE, IMAGE_THUMB_EDGE))
+                    .or_else(|| preview.path.clone());
+        }
+        None => {
+            if looks_like_image_name(&path.to_string_lossy()) {
+                preview.image_thumb = preview.path.clone();
+            }
+        }
+    }
+}
+
+/// List thumbnail plus a filesystem path the overlay can load for the full preview.
+pub fn apply_image_preview(store: &Store, preview: &mut Preview, hash: &str, bytes: &[u8]) {
+    let name = match sniff_image_mime(bytes) {
+        "image/jpeg" => "image.jpg",
+        "image/gif" => "image.gif",
+        "image/tiff" => "image.tiff",
+        "image/bmp" => "image.bmp",
+        "image/webp" => "image.webp",
+        _ => "image.png",
+    };
+    let path = store
+        .named_blob_path(hash, Some(name))
+        .unwrap_or_else(|_| store.blob_path(hash))
+        .to_string_lossy()
+        .into_owned();
+    preview.path = Some(path);
+    apply_image_thumb(preview, bytes);
+}
+
 fn truncate_title(s: &str, max: usize) -> String {
     let s = s.trim();
     let first = s.lines().next().unwrap_or(s);
@@ -257,13 +432,15 @@ pub fn ingest_captured(
                     stored.download_token = Some(hex::encode(rand_bytes(16)));
                     preview.file_name = Some(name.clone());
                     preview.file_size = Some(size);
-                    preview.path = Some(
-                        store
-                            .named_blob_path(&hash, Some(&name))
-                            .unwrap_or_else(|_| store.blob_path(&hash))
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
+                    let dest = store
+                        .named_blob_path(&hash, Some(&name))
+                        .unwrap_or_else(|_| store.blob_path(&hash));
+                    preview.path = Some(dest.to_string_lossy().into_owned());
+                    if file_looks_like_image(path) {
+                        apply_image_thumb_from_path(&mut preview, &dest);
+                        stored.width = preview.width;
+                        stored.height = preview.height;
+                    }
                     if ptype == PasteType::File {
                         title = name;
                     }
@@ -275,18 +452,11 @@ pub fn ingest_captured(
                     let (hash, size) = store.put_blob(bytes)?;
                     stored.blob_hash = Some(hash.clone());
                     stored.file_size = Some(size);
-                    if let Some((w, h)) = png_dimensions(bytes) {
+                    if let Some((w, h)) = image_dimensions_any(bytes) {
                         stored.width = Some(w);
                         stored.height = Some(h);
-                        preview.width = Some(w);
-                        preview.height = Some(h);
                     }
-                    if bytes.len() <= 80 * 1024 {
-                        preview.image_thumb = Some(format!(
-                            "data:image/png;base64,{}",
-                            base64::engine::general_purpose::STANDARD.encode(bytes)
-                        ));
-                    }
+                    apply_image_preview(store, &mut preview, &hash, bytes);
                     if ptype == PasteType::Image {
                         title = "图片".into();
                     }
@@ -1809,5 +1979,133 @@ mod tests {
             "新增 文本文档.txt"
         );
         assert!(payload.text.is_none());
+    }
+
+    fn cap_image(bytes: Vec<u8>) -> CapturedItem {
+        CapturedItem {
+            ty: PasteType::Image,
+            text: None,
+            html: None,
+            rtf: None,
+            url: None,
+            color: None,
+            image: Some(bytes),
+            file_path: None,
+        }
+    }
+
+    fn png_bytes(w: u32, h: u32, noisy: bool) -> Vec<u8> {
+        let mut img = image::RgbImage::new(w, h);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            if noisy {
+                let n = x.wrapping_mul(1_103_515_245).wrapping_add(y.wrapping_mul(12_345));
+                *p = image::Rgb([(n >> 16) as u8, (n >> 8) as u8, n as u8]);
+            } else {
+                *p = image::Rgb([(x % 256) as u8, (y % 256) as u8, 80]);
+            }
+        }
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn image_ingest_stores_data_url_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let small = png_bytes(16, 16, false);
+        let captured = CapturedPasteboard {
+            items: vec![cap_image(small)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        let thumb = entry.preview.image_thumb.expect("thumb");
+        assert!(thumb.starts_with("data:image/"));
+        assert_eq!(entry.preview.width, Some(16));
+        assert_eq!(entry.preview.height, Some(16));
+        assert!(entry.preview.path.is_some());
+    }
+
+    #[test]
+    fn large_image_still_gets_compact_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let large = png_bytes(512, 512, true);
+        assert!(
+            large.len() > INLINE_IMAGE_MAX,
+            "fixture too small: {}",
+            large.len()
+        );
+        let captured = CapturedPasteboard {
+            items: vec![cap_image(large)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        let thumb = entry.preview.image_thumb.expect("thumb");
+        assert!(thumb.starts_with("data:image/"));
+        assert!(thumb.len() < INLINE_IMAGE_MAX);
+    }
+
+    #[test]
+    fn image_file_ingest_keeps_file_type_and_gets_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let src = dir.path().join("截图.png");
+        std::fs::write(&src, png_bytes(32, 24, false)).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_file(src), cap_text("/tmp/截图.png")],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::File);
+        assert_eq!(entry.title, "截图.png");
+        assert_eq!(entry.preview.file_name.as_deref(), Some("截图.png"));
+        let thumb = entry.preview.image_thumb.expect("thumb");
+        assert!(thumb.starts_with("data:image/"));
+        assert_eq!(entry.preview.width, Some(32));
+        assert_eq!(entry.preview.height, Some(24));
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        assert_eq!(
+            payload.file_paths[0].file_name().unwrap().to_string_lossy(),
+            "截图.png"
+        );
+        assert!(payload.image_png.is_none());
+    }
+
+    #[test]
+    fn plain_file_ingest_has_no_image_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let src = dir.path().join("notes.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_file(src)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::File);
+        assert!(entry.preview.image_thumb.is_none());
+        assert!(entry.preview.width.is_none());
+    }
+
+    #[test]
+    fn looks_like_image_name_matches_common_exts() {
+        assert!(looks_like_image_name("a.PNG"));
+        assert!(looks_like_image_name("photo.jpeg"));
+        assert!(looks_like_image_name("x.webp"));
+        assert!(!looks_like_image_name("notes.txt"));
+        assert!(!looks_like_image_name("archive.tar.gz"));
+        assert!(looks_like_image_magic(&png_bytes(8, 8, false)));
+        assert!(!looks_like_image_magic(b"hello"));
     }
 }

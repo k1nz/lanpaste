@@ -309,14 +309,21 @@ fn ingest_remote(
                     if let Some(b64) = &it.image_b64 {
                         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
                             let (hash, _) = store.put_blob(&bytes)?;
-                            stored.blob_hash = Some(hash);
-                            if bytes.len() <= 80 * 1024 {
-                                preview.image_thumb = Some(format!(
-                                    "data:image/png;base64,{b64}"
-                                ));
+                            stored.blob_hash = Some(hash.clone());
+                            if stored.width.is_none() {
+                                if let Some((w, h)) = crate::clipboard::image_dimensions_any(&bytes)
+                                {
+                                    stored.width = Some(w);
+                                    stored.height = Some(h);
+                                }
                             }
-                            preview.width = it.width;
-                            preview.height = it.height;
+                            crate::clipboard::apply_image_preview(
+                                store, &mut preview, &hash, &bytes,
+                            );
+                            if preview.width.is_none() {
+                                preview.width = it.width;
+                                preview.height = it.height;
+                            }
                         }
                     }
                 }

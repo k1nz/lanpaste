@@ -15,10 +15,7 @@ pub fn list_history(
     query: Option<String>,
     type_filter: Option<String>,
 ) -> Result<Vec<HistoryEntry>, String> {
-    state.with_store(|s| {
-        let blob = s.blob_dir.clone();
-        s.list_history(query.as_deref(), type_filter.as_deref(), &blob)
-    })
+    state.with_store(|s| s.list_history(query.as_deref(), type_filter.as_deref()))
 }
 
 #[tauri::command]

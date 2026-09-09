@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -317,7 +318,6 @@ impl Store {
         &self,
         query: Option<&str>,
         type_filter: Option<&str>,
-        blob_dir: &Path,
     ) -> Result<Vec<HistoryEntry>, String> {
         let mut sql = String::from(
             "SELECT DISTINCT p.id, p.copied_at, p.source_device_id, p.source_device_name, p.primary_type, p.title, p.content_hash, p.total_bytes, p.needs_file_download, p.file_download_state, p.download_token, p.source_host, p.source_port, p.preview_json
@@ -351,17 +351,21 @@ impl Store {
         let rows = stmt
             .query_map(params_refs.as_slice(), row_to_pb)
             .map_err(|e| format!("list query: {e}"))?;
+        let image_blobs = self.image_blob_paths()?;
         let mut out = Vec::new();
         for row in rows {
             let pb = row.map_err(|e| format!("list row: {e}"))?;
-            out.push(pb_to_entry(&pb, blob_dir)?);
+            out.push(pb_to_entry(&pb, &image_blobs)?);
         }
         Ok(out)
     }
 
     pub fn get_entry(&self, id: &str) -> Result<Option<HistoryEntry>, String> {
         match self.get_pasteboard(id)? {
-            Some(pb) => Ok(Some(pb_to_entry(&pb, &self.blob_dir)?)),
+            Some(pb) => {
+                let image_blobs = self.image_blob_paths()?;
+                Ok(Some(pb_to_entry(&pb, &image_blobs)?))
+            }
             None => Ok(None),
         }
     }
@@ -474,6 +478,24 @@ impl Store {
             out.push(row.map_err(|e| format!("hash row: {e}"))?);
         }
         Ok(out)
+    }
+
+    fn image_blob_paths(&self) -> Result<HashMap<String, PathBuf>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT pasteboard_id, blob_hash FROM items WHERE item_type = 'image' AND blob_hash IS NOT NULL",
+            )
+            .map_err(|e| format!("image blobs: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("image blobs query: {e}"))?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (pid, hash) = row.map_err(|e| format!("image blob row: {e}"))?;
+            map.entry(pid).or_insert_with(|| self.blob_path(&hash));
+        }
+        Ok(map)
     }
 
     fn gc_blobs(&self) -> Result<(), String> {
@@ -887,14 +909,22 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDevice> {
     })
 }
 
-fn pb_to_entry(pb: &StoredPasteboard, blob_dir: &Path) -> Result<HistoryEntry, String> {
-    let preview: Preview =
-        serde_json::from_str(&pb.preview_json).unwrap_or_default();
-    if let Some(name) = preview.file_name.clone() {
-        if preview.path.is_none() {
-            // Best-effort local blob path when we already have a hash in preview.path later.
-            let _ = name;
-            let _ = blob_dir;
+fn pb_to_entry(
+    pb: &StoredPasteboard,
+    image_blobs: &HashMap<String, PathBuf>,
+) -> Result<HistoryEntry, String> {
+    let mut preview: Preview = serde_json::from_str(&pb.preview_json).unwrap_or_default();
+    if pb.primary_type == "image" {
+        if let Some(path) = image_blobs.get(&pb.id) {
+            if path.exists() {
+                let path_str = path.to_string_lossy().into_owned();
+                if preview.path.is_none() {
+                    preview.path = Some(path_str.clone());
+                }
+                if preview.image_thumb.is_none() {
+                    preview.image_thumb = Some(path_str);
+                }
+            }
         }
     }
     Ok(HistoryEntry {
@@ -1055,5 +1085,51 @@ mod tests {
             "新增 文本文档.txt"
         );
         assert_eq!(std::fs::read(&named).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn list_hydrates_image_thumb_from_blob_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let (hash, _) = store.put_blob(b"png-bytes").unwrap();
+        let pb = StoredPasteboard {
+            id: "pb-img".into(),
+            copied_at: 1,
+            source_device_id: Some("dev".into()),
+            source_device_name: "Dev".into(),
+            primary_type: "image".into(),
+            title: "图片".into(),
+            content_hash: "h".into(),
+            total_bytes: 9,
+            needs_file_download: false,
+            file_download_state: "idle".into(),
+            download_token: None,
+            source_host: None,
+            source_port: None,
+            preview_json: "{}".into(),
+        };
+        let item = StoredItem {
+            id: "item-img".into(),
+            pasteboard_id: "pb-img".into(),
+            sort_order: 0,
+            item_type: "image".into(),
+            text_content: None,
+            html_content: None,
+            rtf_b64: None,
+            url: None,
+            color: None,
+            blob_hash: Some(hash.clone()),
+            file_name: None,
+            file_size: Some(9),
+            width: None,
+            height: None,
+            download_token: None,
+        };
+        store.insert_pasteboard(&pb, &[item]).unwrap();
+        let list = store.list_history(None, None).unwrap();
+        assert_eq!(list.len(), 1);
+        let thumb = list[0].preview.image_thumb.as_deref().unwrap();
+        assert!(thumb.contains(&hash));
+        assert_eq!(list[0].preview.path.as_deref(), Some(thumb));
     }
 }
