@@ -722,14 +722,15 @@ mod win32 {
         QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_V,
+        MapVirtualKeyW, SendInput, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+        KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_V,
     };
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
     use windows::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, BringWindowToTop, GetAncestor, GetClassNameW, GetForegroundWindow,
-        GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetForegroundWindow, ShowWindow, SwitchToThisWindow, ASFW_ANY, GA_ROOT, SW_RESTORE,
+        AllowSetForegroundWindow, BringWindowToTop, FindWindowExW, FindWindowW, GetAncestor,
+        GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow, SwitchToThisWindow, ASFW_ANY,
+        GA_ROOT, SW_RESTORE,
     };
 
     struct PrevTarget {
@@ -844,45 +845,106 @@ mod win32 {
         }
     }
 
-    fn is_shell_window(hwnd: HWND) -> bool {
-        let class = class_name(hwnd);
+    fn is_tray_window(hwnd: HWND) -> bool {
         matches!(
-            class.as_str(),
+            class_name(hwnd).as_str(),
             "Shell_TrayWnd"
                 | "Shell_SecondaryTrayWnd"
                 | "NotifyIconOverflowWindow"
-                | "Progman"
-                | "WorkerW"
                 | "ForegroundStaging"
                 | "Windows.Internal.Shell.TabProxyWindow"
-                | "#32769"
         )
     }
 
-    fn is_usable_target(hwnd: HWND) -> bool {
+    /// Top-level hosts for the wallpaper / icon desktop — not Explorer folders
+    /// (`CabinetWClass`) and not arbitrary `SysListView32` controls.
+    fn is_desktop_host_class(class: &str) -> bool {
+        matches!(class, "Progman" | "WorkerW" | "#32769")
+    }
+
+    fn is_desktop_hwnd(hwnd: HWND) -> bool {
+        is_desktop_host_class(&class_name(hwnd))
+            || is_desktop_host_class(&class_name(top_level(hwnd)))
+    }
+
+    fn find_child(parent: Option<HWND>, after: Option<HWND>, class: windows::core::PCWSTR) -> HWND {
         unsafe {
-            if hwnd_null(hwnd) || !IsWindow(Some(hwnd)).as_bool() {
-                return false;
-            }
-            if !IsWindowVisible(hwnd).as_bool() {
-                return false;
-            }
-            if is_own_process(hwnd) || is_shell_window(hwnd) {
-                return false;
-            }
-            true
+            FindWindowExW(parent, after, class, windows::core::PCWSTR::null())
+                .unwrap_or(HWND(std::ptr::null_mut()))
         }
     }
 
-    pub fn track_frontmost() {
-        let hwnd = top_level(unsafe { GetForegroundWindow() });
-        if !is_usable_target(hwnd) {
-            return;
+    fn defview_list(defview: HWND) -> HWND {
+        let list = find_child(Some(defview), None, w!("SysListView32"));
+        if !hwnd_null(list) {
+            return list;
         }
-        let name = process_name(hwnd);
-        let mut g = prev_lock();
-        g.hwnd = hwnd_as_isize(hwnd);
-        g.name = name;
+        let dui = find_child(Some(defview), None, w!("DirectUIHWND"));
+        if hwnd_null(dui) {
+            defview
+        } else {
+            dui
+        }
+    }
+
+    /// Desktop icon list — Ctrl+V here drops files onto the desktop.
+    fn desktop_paste_hwnd() -> Option<HWND> {
+        unsafe {
+            let progman = FindWindowW(w!("Progman"), windows::core::PCWSTR::null())
+                .unwrap_or(HWND(std::ptr::null_mut()));
+            let mut defview = find_child(
+                Some(progman).filter(|h| !hwnd_null(*h)),
+                None,
+                w!("SHELLDLL_DefView"),
+            );
+            if hwnd_null(defview) {
+                let mut after: Option<HWND> = None;
+                for _ in 0..32 {
+                    let worker = find_child(None, after, w!("WorkerW"));
+                    if hwnd_null(worker) {
+                        break;
+                    }
+                    defview = find_child(Some(worker), None, w!("SHELLDLL_DefView"));
+                    if !hwnd_null(defview) {
+                        break;
+                    }
+                    after = Some(worker);
+                }
+            }
+            if hwnd_null(defview) {
+                return None;
+            }
+            Some(defview_list(defview))
+        }
+    }
+
+    fn resolve_target(fg: HWND) -> Option<(HWND, String)> {
+        if hwnd_null(fg) || is_own_process(fg) || is_tray_window(fg) {
+            return None;
+        }
+        if is_desktop_hwnd(fg) {
+            let hwnd = desktop_paste_hwnd().unwrap_or(top_level(fg));
+            return Some((hwnd, "桌面".into()));
+        }
+        let hwnd = top_level(fg);
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || !IsWindowVisible(hwnd).as_bool() {
+                return None;
+            }
+        }
+        if is_own_process(hwnd) || is_tray_window(hwnd) {
+            return None;
+        }
+        Some((hwnd, process_name(hwnd)))
+    }
+
+    pub fn track_frontmost() {
+        let fg = unsafe { GetForegroundWindow() };
+        if let Some((hwnd, name)) = resolve_target(fg) {
+            let mut g = prev_lock();
+            g.hwnd = hwnd_as_isize(hwnd);
+            g.name = name;
+        }
     }
 
     pub fn remember_frontmost() -> Result<String, String> {
@@ -895,7 +957,10 @@ mod win32 {
         if is_own_process(hwnd) {
             return Ok(prev_lock().name.clone());
         }
-        Ok(process_name(hwnd))
+        if let Some((_, name)) = resolve_target(hwnd) {
+            return Ok(name);
+        }
+        Ok(prev_lock().name.clone())
     }
 
     pub fn change_count() -> Result<i64, String> {
@@ -907,12 +972,25 @@ mod win32 {
             if hwnd_null(hwnd) || !IsWindow(Some(hwnd)).as_bool() {
                 return;
             }
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
+            let desktop = is_desktop_hwnd(hwnd);
+            // SetForegroundWindow only works on top-level windows. The desktop
+            // paste target is the icon list (child); raise Progman/WorkerW instead.
+            let raise = if desktop {
+                let top = top_level(hwnd);
+                if hwnd_null(top) {
+                    hwnd
+                } else {
+                    top
+                }
+            } else {
+                hwnd
+            };
+            if IsIconic(raise).as_bool() {
+                let _ = ShowWindow(raise, SW_RESTORE);
             }
 
             let fg = GetForegroundWindow();
-            if !hwnd_null(fg) && hwnd_as_isize(fg) == hwnd_as_isize(hwnd) {
+            if !desktop && !hwnd_null(fg) && hwnd_as_isize(fg) == hwnd_as_isize(hwnd) {
                 return;
             }
 
@@ -922,16 +1000,21 @@ mod win32 {
             } else {
                 GetWindowThreadProcessId(fg, None)
             };
-            let target_tid = GetWindowThreadProcessId(hwnd, None);
+            let target_tid = GetWindowThreadProcessId(raise, None);
             let attached = fg_tid != 0
                 && target_tid != 0
                 && fg_tid != target_tid
                 && AttachThreadInput(fg_tid, target_tid, true).as_bool();
 
             let _ = AllowSetForegroundWindow(ASFW_ANY);
-            SwitchToThisWindow(hwnd, true);
-            let _ = BringWindowToTop(hwnd);
-            let _ = SetForegroundWindow(hwnd);
+            if !desktop {
+                SwitchToThisWindow(raise, true);
+                let _ = BringWindowToTop(raise);
+            }
+            let _ = SetForegroundWindow(raise);
+            if desktop {
+                let _ = SetFocus(Some(hwnd));
+            }
 
             if attached {
                 let _ = AttachThreadInput(fg_tid, target_tid, false);
