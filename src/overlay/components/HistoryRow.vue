@@ -21,6 +21,9 @@ const emit = defineEmits<{
 const icon = computed(() =>
   hasImagePreview(props.item) ? TYPE_ICONS.image : TYPE_ICONS[props.item.primaryType],
 );
+const title = computed(() =>
+  displayTitle(props.item.title, props.item.primaryType, props.item.preview),
+);
 const time = computed(() => relativeTime(props.item.copiedAt));
 const thumbFailed = ref(false);
 const thumb = computed(() => {
@@ -87,7 +90,7 @@ function onContext(ev: MouseEvent) {
         :weight="selected ? 'fill' : 'regular'"
       />
     </span>
-    <span class="title">{{ displayTitle(item.title, item.primaryType) }}</span>
+    <span class="title">{{ title }}</span>
     <span v-if="item.needsFileDownload && !showBar" class="meta pending">
       {{ item.preview.fileSize != null ? formatBytes(item.preview.fileSize) : t("overlay.pendingDownload") }}
     </span>

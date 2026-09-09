@@ -941,11 +941,33 @@ fn pb_to_entry(
         source_device_id: pb.source_device_id.clone(),
         source_device_name: pb.source_device_name.clone(),
         primary_type: PasteType::parse(&pb.primary_type).unwrap_or(PasteType::Text),
-        title: pb.title.clone(),
+        title: readable_list_title(&pb.title, &preview),
         preview,
         needs_file_download: pb.needs_file_download,
         file_download_state: pb.file_download_state.clone(),
     })
+}
+
+fn readable_list_title(title: &str, preview: &Preview) -> String {
+    if !is_opaque_list_title(title) {
+        return title.to_string();
+    }
+    if let Some(text) = preview.text.as_deref() {
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !line.is_empty() && !is_opaque_list_title(&line) {
+            return line.chars().take(80).collect();
+        }
+    }
+    title.to_string()
+}
+
+fn is_opaque_list_title(title: &str) -> bool {
+    let t = title.trim();
+    t.is_empty()
+        || t.eq_ignore_ascii_case("rtf")
+        || t.eq_ignore_ascii_case("html")
+        || t.starts_with('<')
+        || t.starts_with("{\\rtf")
 }
 
 pub fn now_ms() -> i64 {
@@ -1139,6 +1161,20 @@ mod tests {
         let thumb = list[0].preview.image_thumb.as_deref().unwrap();
         assert!(thumb.contains(&hash));
         assert_eq!(list[0].preview.path.as_deref(), Some(thumb));
+    }
+
+    #[test]
+    fn list_uses_preview_text_instead_of_rtf_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let mut pb = sample_pb("pb-rtf");
+        pb.primary_type = "rtf".into();
+        pb.title = "RTF".into();
+        pb.preview_json = r#"{"text":"管理器修改账户信息"}"#.into();
+        store.insert_pasteboard(&pb, &[]).unwrap();
+        let list = store.list_history(None, None).unwrap();
+        assert_eq!(list[0].title, "管理器修改账户信息");
+        assert_eq!(list[0].primary_type, PasteType::Rtf);
     }
 
     #[test]

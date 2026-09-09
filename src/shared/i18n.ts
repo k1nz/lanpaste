@@ -63,9 +63,46 @@ const GENERIC_CLIPBOARD = new Set([
 ]);
 const GENERIC_IMAGE = new Set([enUS["type.image"], zhCN["type.image"]]);
 const GENERIC_LOCAL = new Set([enUS["overlay.local"], zhCN["overlay.local"]]);
+const OPAQUE_TITLES = new Set([
+  enUS["type.rtf"],
+  zhCN["type.rtf"],
+  enUS["type.html"],
+  zhCN["type.html"],
+  "RTF",
+  "HTML",
+]);
 
-export function displayTitle(title: string, primaryType?: string): string {
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function isOpaqueTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return true;
+  if (OPAQUE_TITLES.has(t)) return true;
+  if (GENERIC_CLIPBOARD.has(t)) return true;
+  return t.startsWith("<") || t.startsWith("{\\rtf");
+}
+
+function previewSnippet(preview?: { text?: string; html?: string }): string {
+  for (const raw of [preview?.text, preview?.html]) {
+    if (!raw) continue;
+    const line = oneLine(raw);
+    if (line && !isOpaqueTitle(line)) return line;
+  }
+  return "";
+}
+
+export function displayTitle(
+  title: string,
+  primaryType?: string,
+  preview?: { text?: string; html?: string },
+): string {
   if (GENERIC_IMAGE.has(title)) return t("type.image");
+  const snippet = previewSnippet(preview);
+  if (snippet && (isOpaqueTitle(title) || primaryType === "rtf" || primaryType === "html")) {
+    return snippet;
+  }
   if (GENERIC_CLIPBOARD.has(title)) {
     return primaryType === "image" ? t("type.image") : t("overlay.genericClipboard");
   }
