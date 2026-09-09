@@ -189,6 +189,7 @@ onUnmounted(() => {
             @update:model-value="setFlags(dev, { autoWriteClipboard: $event })"
           />
         </div>
+        <p class="flag-hint">{{ t("settings.devices.autoWriteHint") }}</p>
       </li>
     </ul>
   </section>
@@ -356,5 +357,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+}
+
+.flag-hint {
+  margin: var(--space-sm) 0 0;
+  font-size: 12px;
+  color: var(--color-muted);
 }
 </style>

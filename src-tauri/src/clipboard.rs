@@ -1,10 +1,103 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
 use crate::store::{content_hash_for, now_ms, Store, StoredItem, StoredPasteboard};
 use crate::types::{primary_type, PasteType, Preview};
+
+pub type FileFulfill = Arc<dyn Fn(String) -> Result<PathBuf, String> + Send + Sync>;
+
+static OWN_PROMISE_COUNT: AtomicI64 = AtomicI64::new(-1);
+static SKIP_CLIPBOARD_READ: AtomicBool = AtomicBool::new(false);
+static FILE_FULFILL: Mutex<Option<FileFulfill>> = Mutex::new(None);
+static FILE_PROMISE_ID: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn install_file_fulfill(f: FileFulfill) {
+    if let Ok(mut g) = FILE_FULFILL.lock() {
+        *g = Some(f);
+    }
+}
+
+pub fn note_own_promise(count: Option<i64>) {
+    OWN_PROMISE_COUNT.store(count.unwrap_or(-1), Ordering::SeqCst);
+    if count.is_none() {
+        if let Ok(mut g) = FILE_PROMISE_ID.lock() {
+            *g = None;
+        }
+    }
+}
+
+pub fn own_promise_active() -> bool {
+    if SKIP_CLIPBOARD_READ.load(Ordering::SeqCst) {
+        return true;
+    }
+    let marked = OWN_PROMISE_COUNT.load(Ordering::SeqCst);
+    if marked < 0 {
+        return false;
+    }
+    pasteboard_change_count()
+        .map(|c| c == marked)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn current_promise_id() -> Option<String> {
+    FILE_PROMISE_ID.lock().ok().and_then(|g| g.clone())
+}
+
+#[cfg(target_os = "windows")]
+fn fulfill_promised_file() -> Result<PathBuf, String> {
+    let id = current_promise_id().ok_or_else(|| "没有待获取的文件".to_string())?;
+    fulfill_promised_file_id(&id)
+}
+
+fn fulfill_promised_file_id(id: &str) -> Result<PathBuf, String> {
+    let f = FILE_FULFILL
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .ok_or_else(|| "文件获取未就绪".to_string())?;
+    f(id.to_string())
+}
+
+/// Place a delayed file on the system clipboard. Bytes are fetched when another
+/// app pastes (NSPasteboardItemDataProvider / CF_HDROP delayed rendering).
+pub fn write_file_promise(pasteboard_id: &str) -> Result<i64, String> {
+    SKIP_CLIPBOARD_READ.store(true, Ordering::SeqCst);
+    if let Ok(mut g) = FILE_PROMISE_ID.lock() {
+        *g = Some(pasteboard_id.to_string());
+    }
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            macos::write_promise(pasteboard_id)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = pasteboard_id;
+            win32::write_delayed_hdrop()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = pasteboard_id;
+            Err("此平台不支持延迟文件剪贴板".into())
+        }
+    };
+    match &result {
+        Ok(count) => note_own_promise(Some(*count)),
+        Err(_) => note_own_promise(None),
+    }
+    SKIP_CLIPBOARD_READ.store(false, Ordering::SeqCst);
+    result
+}
+
+#[cfg(target_os = "windows")]
+pub fn install_clipboard_owner_hwnd(hwnd: isize) {
+    win32::subclass_owner(hwnd);
+}
 
 #[derive(Debug, Clone)]
 pub struct CapturedItem {
@@ -297,6 +390,17 @@ pub struct WritePayload {
     pub file_paths: Vec<PathBuf>,
 }
 
+impl WritePayload {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none()
+            && self.html.is_none()
+            && self.rtf.is_none()
+            && self.url.is_none()
+            && self.image_png.is_none()
+            && self.file_paths.is_empty()
+    }
+}
+
 pub fn payload_from_store(store: &Store, pasteboard_id: &str) -> Result<WritePayload, String> {
     let items = store.get_items(pasteboard_id)?;
     let mut payload = WritePayload::default();
@@ -406,6 +510,7 @@ pub fn read_native() -> Result<Option<CapturedPasteboard>, String> {
 }
 
 pub fn write_native(payload: &WritePayload) -> Result<i64, String> {
+    note_own_promise(None);
     #[cfg(target_os = "macos")]
     {
         macos::write(payload)
@@ -475,12 +580,16 @@ pub fn parse_file_url(s: &str) -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
+    use std::sync::Mutex;
+
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
         NSApplicationActivationOptions, NSPasteboard, NSPasteboardTypeFileURL,
         NSPasteboardTypeHTML, NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeString,
         NSPasteboardTypeTIFF, NSPasteboardTypeURL, NSPasteboardWriting, NSWorkspace,
     };
+    #[allow(deprecated)]
+    use objc2_app_kit::NSFilenamesPboardType;
     use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
     pub fn change_count() -> Result<i64, String> {
@@ -531,20 +640,23 @@ mod macos {
     pub fn read() -> Result<Option<CapturedPasteboard>, String> {
         let pb = NSPasteboard::generalPasteboard();
         let mut items: Vec<CapturedItem> = Vec::new();
+        let skip_files = super::own_promise_active();
 
-        if let Some(s) = unsafe { pb.stringForType(NSPasteboardTypeFileURL) } {
-            if let Some(path) = parse_file_url(&s.to_string()) {
-                push_file(&mut items, path);
+        if !skip_files {
+            if let Some(s) = unsafe { pb.stringForType(NSPasteboardTypeFileURL) } {
+                if let Some(path) = parse_file_url(&s.to_string()) {
+                    push_file(&mut items, path);
+                }
             }
-        }
-        if let Some(list) = unsafe { pb.propertyListForType(NSPasteboardTypeFileURL) } {
-            let _ = list;
-        }
-        if let Some(items_arr) = pb.pasteboardItems() {
-            for item in items_arr {
-                if let Some(s) = unsafe { item.stringForType(NSPasteboardTypeFileURL) } {
-                    if let Some(path) = parse_file_url(&s.to_string()) {
-                        push_file(&mut items, path);
+            if let Some(list) = unsafe { pb.propertyListForType(NSPasteboardTypeFileURL) } {
+                let _ = list;
+            }
+            if let Some(items_arr) = pb.pasteboardItems() {
+                for item in items_arr {
+                    if let Some(s) = unsafe { item.stringForType(NSPasteboardTypeFileURL) } {
+                        if let Some(path) = parse_file_url(&s.to_string()) {
+                            push_file(&mut items, path);
+                        }
                     }
                 }
             }
@@ -680,6 +792,86 @@ mod macos {
         Ok(pb.changeCount() as i64)
     }
 
+    use objc2::rc::Retained;
+    use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+    use objc2_app_kit::{NSPasteboardItem, NSPasteboardItemDataProvider, NSPasteboardType};
+    use objc2_foundation::{NSObject, NSObjectProtocol};
+
+    struct FilePromiseIvars {
+        pasteboard_id: String,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "LanPasteFilePromiseProvider"]
+        #[ivars = FilePromiseIvars]
+        struct FilePromiseProvider;
+
+        unsafe impl NSObjectProtocol for FilePromiseProvider {}
+
+        unsafe impl NSPasteboardItemDataProvider for FilePromiseProvider {
+            #[allow(non_snake_case)]
+            #[unsafe(method(pasteboard:item:provideDataForType:))]
+            fn pasteboard_item_provideDataForType(
+                &self,
+                _pasteboard: Option<&NSPasteboard>,
+                item: &NSPasteboardItem,
+                r#type: &NSPasteboardType,
+            ) {
+                let Ok(path) = super::fulfill_promised_file_id(&self.ivars().pasteboard_id) else {
+                    return;
+                };
+                let path_s = NSString::from_str(&path.to_string_lossy());
+                unsafe {
+                    let is_file_url = r#type == NSPasteboardTypeFileURL;
+                    #[allow(deprecated)]
+                    let is_filenames = r#type == NSFilenamesPboardType;
+                    if is_file_url {
+                        let url = NSURL::fileURLWithPath_isDirectory(&path_s, path.is_dir());
+                        if let Some(abs) = url.absoluteString() {
+                            let _ = item.setString_forType(&abs, NSPasteboardTypeFileURL);
+                        }
+                    } else if is_filenames {
+                        let arr = NSArray::from_slice(&[&*path_s]);
+                        #[allow(deprecated)]
+                        let _ = item.setPropertyList_forType(&arr, NSFilenamesPboardType);
+                    }
+                }
+                let _ = self.ivars().pasteboard_id;
+            }
+        }
+    );
+
+    impl FilePromiseProvider {
+        fn new(pasteboard_id: String) -> Retained<Self> {
+            let this = Self::alloc().set_ivars(FilePromiseIvars { pasteboard_id });
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    static MAC_PROVIDER: Mutex<Option<Retained<FilePromiseProvider>>> = Mutex::new(None);
+
+    pub fn write_promise(pasteboard_id: &str) -> Result<i64, String> {
+        let provider = FilePromiseProvider::new(pasteboard_id.to_string());
+        let item = NSPasteboardItem::new();
+        #[allow(deprecated)]
+        let types = unsafe { NSArray::from_slice(&[NSPasteboardTypeFileURL, NSFilenamesPboardType]) };
+        let proto = ProtocolObject::<dyn NSPasteboardItemDataProvider>::from_ref(&*provider);
+        if !item.setDataProvider_forTypes(&proto, &types) {
+            return Err("无法声明延迟文件".into());
+        }
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        let writer = ProtocolObject::<dyn NSPasteboardWriting>::from_retained(item);
+        if !pb.writeObjects(&NSArray::from_retained_slice(&[writer])) {
+            return Err("无法写入延迟文件剪贴板".into());
+        }
+        if let Ok(mut g) = MAC_PROVIDER.lock() {
+            *g = Some(provider);
+        }
+        Ok(pb.changeCount() as i64)
+    }
+
     pub fn simulate_cmd_v() -> Result<(), String> {
         use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
@@ -708,7 +900,9 @@ mod win32 {
     use std::time::Duration;
 
     use windows::core::{w, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
+    use windows::Win32::Foundation::{
+        CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM,
+    };
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
         IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
@@ -727,10 +921,10 @@ mod win32 {
     };
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
     use windows::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, BringWindowToTop, FindWindowExW, FindWindowW, GetAncestor,
-        GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-        IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow, SwitchToThisWindow, ASFW_ANY,
-        GA_ROOT, SW_RESTORE,
+        AllowSetForegroundWindow, BringWindowToTop, CallWindowProcW, FindWindowExW, FindWindowW,
+        GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
+        SwitchToThisWindow, ASFW_ANY, GA_ROOT, GWLP_WNDPROC, SW_RESTORE, WNDPROC,
     };
 
     struct PrevTarget {
@@ -742,6 +936,93 @@ mod win32 {
         hwnd: 0,
         name: String::new(),
     });
+
+    const WM_RENDERFORMAT: u32 = 0x0306;
+    const WM_RENDERALLFORMATS: u32 = 0x0307;
+    const WM_DESTROYCLIPBOARD: u32 = 0x0308;
+
+    static OWNER_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    static ORIG_WNDPROC: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+    pub fn write_delayed_hdrop() -> Result<i64, String> {
+        let owner = hwnd_from_isize(OWNER_HWND.load(std::sync::atomic::Ordering::SeqCst));
+        if hwnd_null(owner) {
+            return Err("剪贴板窗口未就绪".into());
+        }
+        unsafe {
+            let mut opened = false;
+            for _ in 0..8 {
+                if OpenClipboard(Some(owner)).is_ok() {
+                    opened = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !opened {
+                return Err("无法打开剪贴板".into());
+            }
+            let result = (|| {
+                EmptyClipboard().map_err(|e| e.to_string())?;
+                SetClipboardData(u32::from(CF_HDROP.0), None).map_err(|e| e.to_string())?;
+                Ok(GetClipboardSequenceNumber() as i64)
+            })();
+            let _ = CloseClipboard();
+            result
+        }
+    }
+
+    pub fn subclass_owner(hwnd_val: isize) {
+        let hwnd = hwnd_from_isize(hwnd_val);
+        if hwnd_null(hwnd) {
+            return;
+        }
+        OWNER_HWND.store(hwnd_val, std::sync::atomic::Ordering::SeqCst);
+        unsafe {
+            let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, delayed_wndproc as usize as isize);
+            ORIG_WNDPROC.store(prev, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn render_hdrop() {
+        let Ok(path) = super::fulfill_promised_file() else {
+            return;
+        };
+        let _ = unsafe { set_clipboard_bytes(u32::from(CF_HDROP.0), &hdrop_bytes(&[path])) };
+    }
+
+    unsafe extern "system" fn delayed_wndproc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let render = WM_RENDERFORMAT;
+        let render_all = WM_RENDERALLFORMATS;
+        let destroy = WM_DESTROYCLIPBOARD;
+        if msg == render {
+            if wparam.0 as u32 == u32::from(CF_HDROP.0) {
+                render_hdrop();
+            }
+            return LRESULT(0);
+        }
+        if msg == render_all {
+            if OpenClipboard(Some(hwnd)).is_ok() {
+                let _ = EmptyClipboard();
+                render_hdrop();
+                let _ = CloseClipboard();
+            }
+            return LRESULT(0);
+        }
+        if msg == destroy {
+            super::note_own_promise(None);
+        }
+        let orig = ORIG_WNDPROC.load(std::sync::atomic::Ordering::SeqCst);
+        if orig == 0 {
+            return LRESULT(0);
+        }
+        let proc = std::mem::transmute::<isize, WNDPROC>(orig);
+        CallWindowProcW(proc, hwnd, msg, wparam, lparam)
+    }
 
     fn prev_lock() -> std::sync::MutexGuard<'static, PrevTarget> {
         PREV.lock().unwrap_or_else(|e| e.into_inner())
@@ -1292,8 +1573,9 @@ mod win32 {
     pub fn read() -> Result<Option<CapturedPasteboard>, String> {
         with_clipboard(|| {
             let mut items: Vec<CapturedItem> = Vec::new();
+            let skip_files = super::own_promise_active();
             unsafe {
-                if IsClipboardFormatAvailable(u32::from(CF_HDROP.0)).is_ok() {
+                if !skip_files && IsClipboardFormatAvailable(u32::from(CF_HDROP.0)).is_ok() {
                     for path in read_hdrop() {
                         if path.exists() {
                             items.push(CapturedItem {

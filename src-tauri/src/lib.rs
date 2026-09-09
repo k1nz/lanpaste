@@ -93,6 +93,19 @@ pub fn run() {
             };
             app.manage(state.clone());
 
+            {
+                let fulfill_state = state.clone();
+                clipboard::install_file_fulfill(std::sync::Arc::new(move |id| {
+                    fulfill_file_blocking(&fulfill_state, &id)
+                }));
+            }
+            #[cfg(target_os = "windows")]
+            if let Some(w) = handle.get_webview_window("overlay") {
+                if let Ok(hwnd) = w.hwnd() {
+                    clipboard::install_clipboard_owner_hwnd(hwnd.0 as isize);
+                }
+            }
+
             setup_tray(app)?;
             if let Err(e) = ipc::reregister_shortcut(&handle, &settings.overlay_shortcut) {
                 eprintln!("shortcut: {e}");
@@ -195,7 +208,7 @@ fn start_clipboard_watcher(state: AppState) {
                 .ok()
                 .map(|g| *g)
                 .unwrap_or(-1);
-            if count == suppress {
+            if count == suppress || clipboard::own_promise_active() {
                 continue;
             }
             let captured = match clipboard::read_native() {
@@ -238,4 +251,26 @@ fn start_cleanup_loop(state: AppState) {
             let _ = state.with_store(|s| cleanup::apply_cleanup(s, &settings, &inflight));
         }
     });
+}
+
+fn fulfill_file_blocking(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
+    let state = state.clone();
+    let id = id.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn(async move {
+        let result = async {
+            crate::net::download_file(&state, &id).await?;
+            state.with_store(|s| {
+                crate::clipboard::payload_from_store(s, &id)?
+                    .file_paths
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "文件未就绪".to_string())
+            })
+        }
+        .await;
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(Duration::from_secs(60))
+        .map_err(|_| "获取文件超时".to_string())?
 }

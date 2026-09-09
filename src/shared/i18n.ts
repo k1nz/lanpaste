@@ -44,7 +44,7 @@ export const zhCN = {
   "settings.nav.about": "关于",
   "settings.general.title": "通用",
   "settings.general.body":
-    "自动写入剪贴板、允许发送与允许接收均按设备单独设置，默认全部开启。",
+    "自动写入剪贴板、允许发送与允许接收均按设备单独设置，默认全部开启。开启后文字会立刻进入系统剪贴板；文件只在你粘贴时才下载，不会预先占磁盘。",
   "settings.general.goDevices": "前往设备",
   "settings.devices.nearby": "附近",
   "settings.devices.mine": "我的设备",
@@ -59,6 +59,7 @@ export const zhCN = {
   "settings.devices.allowSend": "允许发送",
   "settings.devices.allowReceive": "允许接收",
   "settings.devices.autoWrite": "自动写入剪贴板",
+  "settings.devices.autoWriteHint": "文字立刻写入；文件在系统粘贴时再下载。",
   "settings.devices.online": "在线",
   "settings.devices.offline": "离线",
   "settings.devices.trustBroken": "信任失效，需重新配对",

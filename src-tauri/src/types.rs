@@ -87,6 +87,15 @@ pub fn should_auto_sync(total_bytes: u64, max_bytes: u64) -> bool {
     total_bytes <= max_bytes
 }
 
+pub fn should_claim_file_promise(
+    auto_write: bool,
+    has_file: bool,
+    total_bytes: u64,
+    max_bytes: u64,
+) -> bool {
+    auto_write && has_file && should_auto_sync(total_bytes, max_bytes)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
@@ -224,6 +233,15 @@ mod tests {
         assert!(should_auto_sync(cap, cap));
         assert!(!should_auto_sync(cap + 1, cap));
         assert!(!should_auto_sync(50 * 1024 * 1024, cap));
+    }
+
+    #[test]
+    fn file_promise_only_when_auto_write_under_cap() {
+        let cap = DEFAULT_AUTO_SYNC_MAX_BYTES;
+        assert!(should_claim_file_promise(true, true, 1024, cap));
+        assert!(!should_claim_file_promise(false, true, 1024, cap));
+        assert!(!should_claim_file_promise(true, false, 1024, cap));
+        assert!(!should_claim_file_promise(true, true, cap + 1, cap));
     }
 
     #[test]

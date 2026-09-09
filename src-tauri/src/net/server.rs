@@ -16,7 +16,8 @@ use crate::device::NearbyInfo;
 use crate::state::{AppState, IncomingPair};
 use crate::store::{now_ms, StoredDevice, StoredItem, StoredPasteboard};
 use crate::types::{
-    PairingShowPayload, PasteType, Preview, PAIR_TOKEN_TTL_MS, SYNC_ENTRY_MAX_BODY_BYTES,
+    should_claim_file_promise, PairingShowPayload, PasteType, Preview, PAIR_TOKEN_TTL_MS,
+    SYNC_ENTRY_MAX_BODY_BYTES,
 };
 
 use super::pair::{token_expires_at, validate_token};
@@ -214,17 +215,58 @@ async fn sync_entry(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     state.emit_history();
 
-    if device.auto_write_clipboard && inserted && !parsed.items.iter().any(|i| i.item_type == "file") {
-        if let Ok(payload) = state.with_store(|s| crate::clipboard::payload_from_store(s, &parsed.id)) {
-            if let Ok(count) = crate::clipboard::write_native(&payload) {
-                if let Ok(mut g) = state.inner.suppress_change_count.lock() {
-                    *g = count;
-                }
-            }
-        }
+    if inserted {
+        apply_auto_write(&state, &parsed, &device);
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn remember_clipboard_write(state: &AppState, count: i64) {
+    if let Ok(mut g) = state.inner.suppress_change_count.lock() {
+        *g = count;
+    }
+    if let Ok(mut g) = state.inner.last_change_count.lock() {
+        *g = count;
+    }
+}
+
+fn apply_auto_write(state: &AppState, parsed: &SyncEntryBody, device: &StoredDevice) {
+    if !device.auto_write_clipboard {
+        return;
+    }
+    let cap = state
+        .inner
+        .settings
+        .lock()
+        .ok()
+        .map(|s| s.auto_sync_max_bytes)
+        .unwrap_or(crate::types::DEFAULT_AUTO_SYNC_MAX_BYTES);
+    let has_file = parsed.items.iter().any(|i| i.item_type == "file");
+    if should_claim_file_promise(true, has_file, parsed.total_bytes, cap) {
+        match crate::clipboard::write_file_promise(&parsed.id) {
+            Ok(count) => remember_clipboard_write(state, count),
+            Err(e) => eprintln!("file promise: {e}"),
+        }
+        return;
+    }
+    if has_file {
+        return;
+    }
+    let payload = match state.with_store(|s| crate::clipboard::payload_from_store(s, &parsed.id)) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("auto-write payload: {e}");
+            return;
+        }
+    };
+    if payload.is_empty() {
+        return;
+    }
+    match crate::clipboard::write_native(&payload) {
+        Ok(count) => remember_clipboard_write(state, count),
+        Err(e) => eprintln!("auto-write: {e}"),
+    }
 }
 
 fn ingest_remote(
