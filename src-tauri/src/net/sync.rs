@@ -20,6 +20,7 @@ pub fn build_sync_body(
     items: &[StoredItem],
     image_bytes: &[(String, Vec<u8>)],
 ) -> SyncEntryBody {
+    let has_file = items.iter().any(|it| it.item_type == "file");
     let items = items
         .iter()
         .map(|it| {
@@ -39,12 +40,14 @@ pub fn build_sync_body(
                 width: it.width,
                 height: it.height,
             };
-            if it.item_type == "image" {
+            // Files: metadata only. Finder/Explorer also put a TIFF/PNG preview on
+            // the same pasteboard — never inline that, or POST /sync/entry blows
+            // past the receiver body limit.
+            if it.item_type == "image" && !has_file {
                 if let Some((_, bytes)) = image_bytes.iter().find(|(id, _)| id == &it.id) {
                     si.image_b64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
                 }
             }
-            // Files: metadata only. Never attach bytes.
             if it.item_type == "file" {
                 si.image_b64 = None;
             }
@@ -90,8 +93,14 @@ pub async fn post_sync(state: &AppState, device: &StoredDevice, body: &SyncEntry
     if status.as_u16() == 403 {
         return Err("rejected".into());
     }
+    if status.as_u16() == 413 {
+        return Err("payload_too_large".into());
+    }
     if !status.is_success() {
         let t = resp.text().await.unwrap_or_default();
+        if t.contains("length limit exceeded") {
+            return Err("payload_too_large".into());
+        }
         return Err(if t.is_empty() {
             format!("sync failed: {status}")
         } else {
@@ -157,12 +166,15 @@ pub async fn sync_entry_to_device(
         device
     };
 
+    let has_file = items.iter().any(|it| it.item_type == "file");
     let mut image_bytes = Vec::new();
-    for it in &items {
-        if it.item_type == "image" {
-            if let Some(hash) = &it.blob_hash {
-                if let Ok(bytes) = state.with_store(|s| s.read_blob(hash)) {
-                    image_bytes.push((it.id.clone(), bytes));
+    if !has_file {
+        for it in &items {
+            if it.item_type == "image" {
+                if let Some(hash) = &it.blob_hash {
+                    if let Ok(bytes) = state.with_store(|s| s.read_blob(hash)) {
+                        image_bytes.push((it.id.clone(), bytes));
+                    }
                 }
             }
         }
@@ -400,5 +412,81 @@ mod tests {
         assert_eq!(body.items[0].file_name.as_deref(), Some("a.bin"));
         assert_eq!(body.items[0].file_hash.as_deref(), Some("abc"));
         assert_eq!(body.items[0].download_token.as_deref(), Some("tok"));
+    }
+
+    fn item(id: &str, ty: &str) -> StoredItem {
+        StoredItem {
+            id: id.into(),
+            pasteboard_id: "p1".into(),
+            sort_order: 0,
+            item_type: ty.into(),
+            text_content: None,
+            html_content: None,
+            rtf_b64: None,
+            url: None,
+            color: None,
+            blob_hash: Some("hash".into()),
+            file_name: if ty == "file" {
+                Some("photo.png".into())
+            } else {
+                None
+            },
+            file_size: Some(3 * 1024 * 1024),
+            width: None,
+            height: None,
+            download_token: if ty == "file" {
+                Some("tok".into())
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn file_copy_omits_sidecar_image_bytes() {
+        let preview = vec![0u8; 3 * 1024 * 1024];
+        let body = build_sync_body(
+            "p1",
+            1,
+            "dev",
+            "Dev",
+            "file",
+            "photo.png",
+            preview.len() as u64,
+            &[item("f1", "file"), item("img", "image")],
+            &[("img".into(), preview)],
+        );
+        let image = body
+            .items
+            .iter()
+            .find(|i| i.item_type == "image")
+            .expect("image item");
+        assert!(image.image_b64.is_none());
+        assert!(body
+            .items
+            .iter()
+            .filter(|i| i.item_type == "file")
+            .all(file_item_has_no_bytes));
+    }
+
+    #[test]
+    fn image_only_entry_includes_bytes() {
+        let png = vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
+        let body = build_sync_body(
+            "p1",
+            1,
+            "dev",
+            "Dev",
+            "image",
+            "图片",
+            png.len() as u64,
+            &[item("img", "image")],
+            &[("img".into(), png.clone())],
+        );
+        let b64 = body.items[0].image_b64.as_deref().expect("image_b64");
+        assert_eq!(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).unwrap(),
+            png
+        );
     }
 }

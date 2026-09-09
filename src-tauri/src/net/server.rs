@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::SeekFrom;
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -15,7 +15,9 @@ use crate::crypto::{self, Identity};
 use crate::device::NearbyInfo;
 use crate::state::{AppState, IncomingPair};
 use crate::store::{now_ms, StoredDevice, StoredItem, StoredPasteboard};
-use crate::types::{PairingShowPayload, PasteType, Preview, PAIR_TOKEN_TTL_MS};
+use crate::types::{
+    PairingShowPayload, PasteType, Preview, PAIR_TOKEN_TTL_MS, SYNC_ENTRY_MAX_BODY_BYTES,
+};
 
 use super::pair::{token_expires_at, validate_token};
 use super::protocol::{
@@ -27,8 +29,12 @@ pub fn router(state: AppState) -> Router {
         .route("/pair/request", post(pair_request))
         .route("/pair/confirm", post(pair_confirm))
         .route("/pair/revoke", post(pair_revoke))
-        .route("/sync/entry", post(sync_entry))
         .route("/files/{id}", get(get_file))
+        .merge(
+            Router::new()
+                .route("/sync/entry", post(sync_entry))
+                .layer(DefaultBodyLimit::max(SYNC_ENTRY_MAX_BODY_BYTES)),
+        )
         .with_state(state)
 }
 

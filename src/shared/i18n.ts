@@ -101,6 +101,7 @@ export const zhCN = {
   "err.rejected": "对端拒绝接收",
   "err.removed": "设备已移除",
   "err.disk": "磁盘空间不足",
+  "err.tooLarge": "内容体积过大，无法同步",
   "err.sourceGone": "源设备已无此文件",
   "err.invalidShortcut": "无法使用该快捷键",
 } as const;

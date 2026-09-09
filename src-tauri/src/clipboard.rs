@@ -432,6 +432,10 @@ pub fn activate_app_named(name: &str) -> Result<(), String> {
     }
 }
 
+fn pasteboard_has_file(items: &[CapturedItem]) -> bool {
+    items.iter().any(|i| i.ty == PasteType::File)
+}
+
 pub fn parse_file_url(s: &str) -> Option<PathBuf> {
     let s = s.trim();
     if let Some(rest) = s.strip_prefix("file://") {
@@ -547,16 +551,18 @@ mod macos {
             }
         }
 
-        let png = unsafe { pb.dataForType(NSPasteboardTypePNG) };
-        let tiff = unsafe { pb.dataForType(NSPasteboardTypeTIFF) };
-        if let Some(data) = png.or(tiff) {
-            let bytes = nsdata_bytes(&data);
-            if !bytes.is_empty() {
-                items.push(CapturedItem {
-                    ty: PasteType::Image,
-                    image: Some(bytes),
-                    ..empty_item()
-                });
+        if !pasteboard_has_file(&items) {
+            let png = unsafe { pb.dataForType(NSPasteboardTypePNG) };
+            let tiff = unsafe { pb.dataForType(NSPasteboardTypeTIFF) };
+            if let Some(data) = png.or(tiff) {
+                let bytes = nsdata_bytes(&data);
+                if !bytes.is_empty() {
+                    items.push(CapturedItem {
+                        ty: PasteType::Image,
+                        image: Some(bytes),
+                        ..empty_item()
+                    });
+                }
             }
         }
 
@@ -1199,16 +1205,18 @@ mod win32 {
                     }
                 }
 
-                let png_fmt = RegisterClipboardFormatW(w!("PNG"));
-                if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
-                    if let Ok(handle) = GetClipboardData(png_fmt) {
-                        if let Some(bytes) = handle_bytes(handle) {
-                            if !bytes.is_empty() {
-                                items.push(CapturedItem {
-                                    ty: PasteType::Image,
-                                    image: Some(bytes),
-                                    ..empty_item()
-                                });
+                if !pasteboard_has_file(&items) {
+                    let png_fmt = RegisterClipboardFormatW(w!("PNG"));
+                    if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
+                        if let Ok(handle) = GetClipboardData(png_fmt) {
+                            if let Some(bytes) = handle_bytes(handle) {
+                                if !bytes.is_empty() {
+                                    items.push(CapturedItem {
+                                        ty: PasteType::Image,
+                                        image: Some(bytes),
+                                        ..empty_item()
+                                    });
+                                }
                             }
                         }
                     }
@@ -1346,5 +1354,22 @@ mod tests {
         };
         let b = a.clone();
         assert_eq!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
+    fn file_pasteboard_skips_image_sidecar() {
+        let items = vec![CapturedItem {
+            ty: PasteType::File,
+            text: None,
+            html: None,
+            rtf: None,
+            url: None,
+            color: None,
+            image: None,
+            file_path: Some(PathBuf::from("/tmp/a.bin")),
+        }];
+        assert!(pasteboard_has_file(&items));
+        let empty: Vec<CapturedItem> = Vec::new();
+        assert!(!pasteboard_has_file(&empty));
     }
 }

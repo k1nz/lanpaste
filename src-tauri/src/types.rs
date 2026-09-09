@@ -5,6 +5,10 @@ pub const DEFAULT_CLEANUP_MAX_ITEMS: u64 = 500;
 pub const DEFAULT_CLEANUP_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 pub const DEFAULT_SHORTCUT: &str = "Option+Shift+V";
 pub const PAIR_TOKEN_TTL_MS: u64 = 60_000;
+/// Axum's default request body cap is 2MB. Images go out as base64 (~4/3), so
+/// this sits well above the 20MB auto-sync threshold while still bounding
+/// unauthenticated buffering on POST /sync/entry.
+pub const SYNC_ENTRY_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -205,5 +209,12 @@ mod tests {
         assert!(should_auto_sync(cap, cap));
         assert!(!should_auto_sync(cap + 1, cap));
         assert!(!should_auto_sync(50 * 1024 * 1024, cap));
+    }
+
+    #[test]
+    fn sync_entry_body_limit_covers_base64_images() {
+        let encoded = (DEFAULT_AUTO_SYNC_MAX_BYTES * 4 / 3) as usize;
+        assert!(SYNC_ENTRY_MAX_BODY_BYTES > encoded);
+        assert!(SYNC_ENTRY_MAX_BODY_BYTES > 2 * 1024 * 1024);
     }
 }

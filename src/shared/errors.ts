@@ -7,6 +7,7 @@ const RULES: Array<{ test: RegExp; key: MsgKey }> = [
   { test: /reject|refus/i, key: "err.rejected" },
   { test: /removed|revok|401/i, key: "err.removed" },
   { test: /disk|space|volume/i, key: "err.disk" },
+  { test: /payload_too_large|length limit exceeded|413/i, key: "err.tooLarge" },
   { test: /not found|gone|missing|no longer/i, key: "err.sourceGone" },
   { test: /unavailable/i, key: "err.unavailable" },
   { test: /无效快捷键|unsupported key|invalid hotkey|invalid format/i, key: "err.invalidShortcut" },
