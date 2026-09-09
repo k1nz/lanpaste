@@ -323,10 +323,22 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
         let _ = state.with_store(|s| s.update_download_state(pasteboard_id, "failed", true));
         map_net_err(e)
     })?;
-    if !resp.status().is_success() && resp.status().as_u16() != 206 {
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 206 {
         let _ = state.with_store(|s| s.update_download_state(pasteboard_id, "failed", true));
         state.emit_history();
-        return Err("source_file_gone".into());
+        let t = resp.text().await.unwrap_or_default();
+        if status.as_u16() == 401 || t.contains("device_removed") {
+            return Err("device_removed".into());
+        }
+        if status.as_u16() == 403 || t.contains("rejected") {
+            return Err("rejected".into());
+        }
+        return Err(if t.is_empty() {
+            "source_file_gone".into()
+        } else {
+            t
+        });
     }
     let total = resp.content_length().or(file.file_size).unwrap_or(0);
     let mut received = 0u64;

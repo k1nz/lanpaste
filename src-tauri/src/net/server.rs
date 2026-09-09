@@ -336,48 +336,18 @@ async fn get_file_inner(
     let _auth = auth_paired(state, headers, body)?;
     let token = query.get("token").cloned();
 
-    let (blob_hash, file_token, size) = state
-        .with_store(|s| {
-            let items = if let Some(pb) = s.get_pasteboard(id)? {
-                let _ = pb;
-                s.get_items(id)?
-            } else {
-                Vec::new()
-            };
-            let mut found = None;
-            if items.is_empty() {
-                // id may be an item id: scan via pasteboard listing is heavy; try as pasteboard first.
-            }
-            for it in items {
-                if it.item_type == "file" {
-                    found = Some((it.blob_hash, it.download_token, it.file_size));
-                    break;
-                }
-            }
-            if found.is_none() {
-                // treat id as item id by looking at all? we stored item ids.
-                if let Some(pb) = s.get_pasteboard(id)? {
-                    let its = s.get_items(&pb.id)?;
-                    for it in its {
-                        if it.id == id || it.item_type == "file" {
-                            found = Some((it.blob_hash, it.download_token, it.file_size));
-                            break;
-                        }
-                    }
-                }
-            }
-            Ok(found)
-        })
+    let item = state
+        .with_store(|s| s.find_file_for_download(id))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
         .ok_or((StatusCode::NOT_FOUND, "source_file_gone".into()))?;
 
-    if let (Some(expected), Some(got)) = (file_token, token) {
+    if let (Some(expected), Some(got)) = (item.download_token, token) {
         if expected != got {
             return Err((StatusCode::UNAUTHORIZED, "device_removed".into()));
         }
     }
 
-    let Some(hash) = blob_hash else {
+    let Some(hash) = item.blob_hash else {
         return Err((StatusCode::NOT_FOUND, "source_file_gone".into()));
     };
     let path = state.with_store(|s| Ok(s.blob_path(&hash))).map_err(|e| {
@@ -391,7 +361,9 @@ async fn get_file_inner(
         g.insert(hash.clone());
     }
 
-    let file_len = size.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+    let file_len = item
+        .file_size
+        .unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
     let mut file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "source_file_gone".into()))?;

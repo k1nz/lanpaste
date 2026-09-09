@@ -277,6 +277,41 @@ impl Store {
         Ok(out)
     }
 
+    pub fn get_item(&self, id: &str) -> Result<Option<StoredItem>, String> {
+        self.conn
+            .query_row(
+                "SELECT id, pasteboard_id, sort_order, item_type, text_content, html_content, rtf_b64, url, color, blob_hash, file_name, file_size, width, height, download_token
+                 FROM items WHERE id = ?1",
+                params![id],
+                row_to_item,
+            )
+            .optional()
+            .map_err(|e| format!("get item: {e}"))
+    }
+
+    /// Resolve a file item from either a pasteboard id or an item id.
+    /// Peers download with `GET /files/{item.id}`.
+    pub fn find_file_for_download(&self, id: &str) -> Result<Option<StoredItem>, String> {
+        if self.get_pasteboard(id)?.is_some() {
+            if let Some(it) = self.get_items(id)?.into_iter().find(|i| i.item_type == "file") {
+                return Ok(Some(it));
+            }
+        }
+        if let Some(it) = self.get_item(id)? {
+            if it.item_type == "file" {
+                return Ok(Some(it));
+            }
+            if let Some(file) = self
+                .get_items(&it.pasteboard_id)?
+                .into_iter()
+                .find(|i| i.item_type == "file")
+            {
+                return Ok(Some(file));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn list_history(
         &self,
         query: Option<&str>,
@@ -878,5 +913,66 @@ mod tests {
         let c = content_hash_for(&[("text".into(), b"world".to_vec())]);
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    fn sample_pb(id: &str) -> StoredPasteboard {
+        StoredPasteboard {
+            id: id.into(),
+            copied_at: 1,
+            source_device_id: Some("dev".into()),
+            source_device_name: "Dev".into(),
+            primary_type: "file".into(),
+            title: "a.bin".into(),
+            content_hash: "h".into(),
+            total_bytes: 5,
+            needs_file_download: false,
+            file_download_state: "idle".into(),
+            download_token: Some("tok".into()),
+            source_host: None,
+            source_port: None,
+            preview_json: "{}".into(),
+        }
+    }
+
+    fn sample_file_item(id: &str, pasteboard_id: &str, hash: &str) -> StoredItem {
+        StoredItem {
+            id: id.into(),
+            pasteboard_id: pasteboard_id.into(),
+            sort_order: 0,
+            item_type: "file".into(),
+            text_content: None,
+            html_content: None,
+            rtf_b64: None,
+            url: None,
+            color: None,
+            blob_hash: Some(hash.into()),
+            file_name: Some("a.bin".into()),
+            file_size: Some(5),
+            width: None,
+            height: None,
+            download_token: Some("tok".into()),
+        }
+    }
+
+    #[test]
+    fn find_file_by_item_id_or_pasteboard_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let src = dir.path().join("a.bin");
+        std::fs::write(&src, b"hello").unwrap();
+        let (hash, _) = store.ingest_file(&src).unwrap();
+        store
+            .insert_pasteboard(
+                &sample_pb("pb-1"),
+                &[sample_file_item("item-1", "pb-1", &hash)],
+            )
+            .unwrap();
+
+        let by_item = store.find_file_for_download("item-1").unwrap().unwrap();
+        let by_pb = store.find_file_for_download("pb-1").unwrap().unwrap();
+        assert_eq!(by_item.id, "item-1");
+        assert_eq!(by_item.blob_hash.as_deref(), Some(hash.as_str()));
+        assert_eq!(by_pb.id, "item-1");
+        assert!(store.find_file_for_download("missing").unwrap().is_none());
     }
 }
