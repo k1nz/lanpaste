@@ -31,13 +31,16 @@ import PreviewPane from "./components/PreviewPane.vue";
 import ActionBar from "./components/ActionBar.vue";
 import ActionsMenu from "./components/ActionsMenu.vue";
 import { buildActionItems, type ActionId } from "./actions";
+import { PASTE_TYPES } from "./typeMeta";
 import { PhMagnifyingGlass } from "@phosphor-icons/vue";
 
 const shown = ref(!isTauri());
 const query = ref("");
 const typeFilter = ref<PasteType | "all">("all");
 const filterOpen = ref(false);
+const filterIndex = ref(0);
 const items = ref<HistoryEntry[]>([]);
+const loadingHistory = ref(true);
 const selectedId = ref<string | null>(null);
 const detail = ref<HistoryEntry | null>(null);
 const frontmost = ref("");
@@ -53,14 +56,19 @@ const menuY = ref(0);
 const activeIndex = ref(0);
 const submenuOpen = ref(false);
 const submenuIndex = ref(0);
+const confirmDelete = ref(false);
+
+const TYPE_OPTIONS: Array<PasteType | "all"> = ["all", ...PASTE_TYPES];
 
 let persistSelected: string | null = null;
 let queryTimer: number | null = null;
+let refreshSeq = 0;
 const unlisteners: Array<() => void> = [];
 
 const selected = computed(
   () => items.value.find((it) => it.id === selectedId.value) ?? null,
 );
+const actionItems = computed(() => buildActionItems(selected.value, devices.value));
 const previewEntry = computed(() => {
   if (detail.value && detail.value.id === selectedId.value) return detail.value;
   return selected.value;
@@ -77,6 +85,10 @@ watch(typeFilter, () => {
   void refreshList();
 });
 
+watch(filterOpen, (open) => {
+  if (open) filterIndex.value = Math.max(0, TYPE_OPTIONS.indexOf(typeFilter.value));
+});
+
 watch(selectedId, async (id) => {
   persistSelected = id;
   detail.value = null;
@@ -88,6 +100,7 @@ watch(selectedId, async (id) => {
 function closeMenu() {
   menuOpen.value = false;
   submenuOpen.value = false;
+  confirmDelete.value = false;
   activeIndex.value = 0;
   submenuIndex.value = 0;
 }
@@ -99,30 +112,37 @@ function openActions(mode: "actions" | "context", x = 0, y = 0) {
   menuY.value = y;
   menuOpen.value = true;
   submenuOpen.value = false;
+  confirmDelete.value = false;
   activeIndex.value = 0;
   submenuIndex.value = 0;
 }
 
 async function refreshList(restoreId?: string | null) {
-  try {
-    const list = await listHistory(query.value, typeFilter.value);
-    items.value = list;
-    const want = restoreId ?? persistSelected ?? selectedId.value;
-    if (want && list.some((it) => it.id === want)) {
-      selectedId.value = want;
-    } else {
-      selectedId.value = list[0]?.id ?? null;
-    }
-  } catch (err) {
+  const seq = ++refreshSeq;
+  loadingHistory.value = true;
+  const res = await listHistory(query.value, typeFilter.value);
+  if (seq !== refreshSeq) return;
+  loadingHistory.value = false;
+  if (!res.ok) {
     items.value = [];
     selectedId.value = null;
-    error.value = localizeError(err);
+    error.value = localizeError(res.error);
+    return;
+  }
+  error.value = "";
+  items.value = res.items;
+  const want = restoreId ?? persistSelected ?? selectedId.value;
+  if (want && res.items.some((it) => it.id === want)) {
+    selectedId.value = want;
+  } else {
+    selectedId.value = res.items[0]?.id ?? null;
   }
 }
 
 async function refreshChrome() {
   frontmost.value = await frontmostAppName();
-  devices.value = await listPaired();
+  const res = await listPaired();
+  if (res.ok) devices.value = res.items;
 }
 
 async function onShown() {
@@ -169,6 +189,10 @@ function moveSelection(delta: number) {
 async function runAction(id: ActionId) {
   const entry = selected.value;
   if (!entry) return;
+  if (id === "delete" && !confirmDelete.value) {
+    confirmDelete.value = true;
+    return;
+  }
   closeMenu();
   error.value = "";
   if (id === "paste") {
@@ -246,6 +270,10 @@ function onKey(ev: KeyboardEvent) {
       filterOpen.value = false;
       return;
     }
+    if (confirmDelete.value) {
+      confirmDelete.value = false;
+      return;
+    }
     if (submenuOpen.value) {
       submenuOpen.value = false;
       return;
@@ -257,13 +285,51 @@ function onKey(ev: KeyboardEvent) {
     void animateHide();
     return;
   }
+  if (filterOpen.value) {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      filterIndex.value = Math.min(TYPE_OPTIONS.length - 1, filterIndex.value + 1);
+      return;
+    }
+    if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      filterIndex.value = Math.max(0, filterIndex.value - 1);
+      return;
+    }
+    if (ev.key === "Home") {
+      ev.preventDefault();
+      filterIndex.value = 0;
+      return;
+    }
+    if (ev.key === "End") {
+      ev.preventDefault();
+      filterIndex.value = TYPE_OPTIONS.length - 1;
+      return;
+    }
+    if (ev.key === "Enter" || ev.key === "NumpadEnter") {
+      ev.preventDefault();
+      typeFilter.value = TYPE_OPTIONS[filterIndex.value] ?? "all";
+      filterOpen.value = false;
+      return;
+    }
+    return;
+  }
   if (menuOpen.value) {
+    if (confirmDelete.value) {
+      if (ev.key === "Enter" || ev.key === "NumpadEnter") {
+        ev.preventDefault();
+        void runAction("delete");
+      }
+      return;
+    }
     if (ev.key === "ArrowDown") {
       ev.preventDefault();
       if (submenuOpen.value) {
-        submenuIndex.value = Math.min(devices.value.length - 1, submenuIndex.value + 1);
-      } else {
-        activeIndex.value += 1;
+        if (devices.value.length > 0) {
+          submenuIndex.value = Math.min(devices.value.length - 1, submenuIndex.value + 1);
+        }
+      } else if (actionItems.value.length > 0) {
+        activeIndex.value = Math.min(actionItems.value.length - 1, activeIndex.value + 1);
       }
       return;
     }
@@ -278,7 +344,7 @@ function onKey(ev: KeyboardEvent) {
     }
     if (ev.key === "ArrowRight") {
       ev.preventDefault();
-      const action = buildActionItems(selected.value, devices.value)[activeIndex.value];
+      const action = actionItems.value[activeIndex.value];
       if (action?.submenu && !action.disabled) {
         submenuOpen.value = true;
         submenuIndex.value = 0;
@@ -294,10 +360,10 @@ function onKey(ev: KeyboardEvent) {
       ev.preventDefault();
       if (submenuOpen.value) {
         const dev = devices.value[submenuIndex.value];
-        if (dev && dev.online && !dev.trustBroken) void syncDevice(dev.instanceId);
+        if (dev) void syncDevice(dev.instanceId);
         return;
       }
-      const action = buildActionItems(selected.value, devices.value)[activeIndex.value];
+      const action = actionItems.value[activeIndex.value];
       if (!action || action.disabled) return;
       if (action.submenu) {
         submenuOpen.value = true;
@@ -383,17 +449,28 @@ onUnmounted(() => {
         v-model="query"
         class="search-input"
         type="text"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="true"
+        aria-controls="history-listbox"
+        :aria-activedescendant="selectedId ? `row-${selectedId}` : undefined"
         :placeholder="t('overlay.searchPlaceholder')"
         autocomplete="off"
         spellcheck="false"
         @keydown.enter.prevent
       />
-      <TypeFilter v-model="typeFilter" v-model:open="filterOpen" />
+      <TypeFilter
+        v-model="typeFilter"
+        v-model:open="filterOpen"
+        :active-index="filterIndex"
+        @update:active-index="filterIndex = $event"
+      />
     </header>
 
     <div class="split">
       <HistoryList
         :items="items"
+        :loading="loadingHistory"
         :selected-id="selectedId"
         :progress="progress"
         @select="selectedId = $event"
@@ -423,6 +500,7 @@ onUnmounted(() => {
       :active-index="activeIndex"
       :submenu-open="submenuOpen"
       :submenu-index="submenuIndex"
+      :confirm-delete="confirmDelete"
       @close="closeMenu"
       @run="runAction"
       @sync-device="syncDevice"

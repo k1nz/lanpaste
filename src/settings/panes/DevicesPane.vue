@@ -19,6 +19,8 @@ import ToggleSwitch from "../components/ToggleSwitch.vue";
 const nearby = ref<NearbyDevice[]>([]);
 const paired = ref<PairedDevice[]>([]);
 const error = ref("");
+const loading = ref(true);
+const loadFailed = ref(false);
 const menuFor = ref<string | null>(null);
 const editingId = ref<string | null>(null);
 const noteDraft = ref("");
@@ -30,9 +32,14 @@ const unpairedNearby = computed(() => {
 });
 
 async function refresh() {
-  const [n, p] = await Promise.all([listNearby(), listPaired()]);
-  nearby.value = n;
-  paired.value = p;
+  loading.value = true;
+  const [nearbyRes, pairedRes] = await Promise.all([listNearby(), listPaired()]);
+  if (nearbyRes.ok) nearby.value = nearbyRes.items;
+  if (pairedRes.ok) paired.value = pairedRes.items;
+  const failure = !nearbyRes.ok ? nearbyRes : !pairedRes.ok ? pairedRes : null;
+  loadFailed.value = failure !== null;
+  error.value = failure ? localizeError(failure.error) : "";
+  loading.value = false;
 }
 
 async function addDevice(instanceId: string) {
@@ -95,8 +102,13 @@ onUnmounted(() => {
     <p v-if="error" class="live-error" role="alert">{{ error }}</p>
 
     <h2>{{ t("settings.devices.nearby") }}</h2>
-    <p v-if="unpairedNearby.length === 0" class="empty">{{ t("settings.devices.emptyNearby") }}</p>
-    <ul v-else class="device-list">
+    <p v-if="loading && unpairedNearby.length === 0" class="empty">
+      {{ t("settings.devices.loading") }}
+    </p>
+    <p v-else-if="unpairedNearby.length === 0 && !loadFailed" class="empty">
+      {{ t("settings.devices.emptyNearby") }}
+    </p>
+    <ul v-else-if="unpairedNearby.length > 0" class="device-list">
       <li v-for="dev in unpairedNearby" :key="dev.instanceId" class="device-row">
         <div class="who">
           <strong>{{ dev.name }}</strong>
@@ -110,8 +122,13 @@ onUnmounted(() => {
     </ul>
 
     <h2>{{ t("settings.devices.mine") }}</h2>
-    <p v-if="paired.length === 0" class="empty">{{ t("settings.devices.emptyPaired") }}</p>
-    <ul v-else class="device-list paired">
+    <p v-if="loading && paired.length === 0" class="empty">
+      {{ t("settings.devices.loading") }}
+    </p>
+    <p v-else-if="paired.length === 0 && !loadFailed" class="empty">
+      {{ t("settings.devices.emptyPaired") }}
+    </p>
+    <ul v-else-if="paired.length > 0" class="device-list paired">
       <li v-for="dev in paired" :key="dev.instanceId" class="device-card">
         <header class="card-head">
           <span

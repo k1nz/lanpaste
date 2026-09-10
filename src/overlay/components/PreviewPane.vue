@@ -29,6 +29,61 @@ const transferring = computed(() => {
         (props.progress && props.progress.id === e.id && ratio.value < 1)),
   );
 });
+
+/**
+ * Readable text for text-like previews. HTML is parsed with DOMParser (inert: it
+ * never executes scripts or loads subresources) and reduced to text, then shown as
+ * pre-wrapped text. We deliberately do not render the markup — doing that safely
+ * needs a sanitiser dependency, which this app does not ship.
+ */
+const BLOCK_TAGS = new Set([
+  "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "BR", "DD", "DIV", "DL", "DT",
+  "FIGCAPTION", "FIGURE", "FOOTER", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER",
+  "HR", "LI", "MAIN", "NAV", "OL", "P", "PRE", "SECTION", "TABLE", "TD", "TH",
+  "TR", "UL",
+]);
+
+function collectText(node: Node, out: string[]): void {
+  if (node.nodeType === 3) {
+    out.push(node.nodeValue ?? "");
+    return;
+  }
+  if (node.nodeType !== 1) return;
+  const el = node as Element;
+  const block = BLOCK_TAGS.has(el.tagName);
+  if (block && out.length > 0) out.push("\n");
+  el.childNodes.forEach((child) => collectText(child, out));
+  if (block) out.push("\n");
+}
+
+function stripHtml(raw: string): string {
+  // The backend sometimes stores already-extracted visible text here; only parse
+  // when the string actually looks like markup, so plain text with "<" survives.
+  if (!/<[a-z][\s\S]*>/i.test(raw)) return raw.trim();
+  try {
+    const doc = new DOMParser().parseFromString(raw, "text/html");
+    const out: string[] = [];
+    if (doc.body) collectText(doc.body, out);
+    return out
+      .join("")
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    return raw.trim();
+  }
+}
+
+const textPreview = computed(() => {
+  const e = props.entry;
+  if (!e) return "";
+  const plain = e.preview.text?.trim();
+  if (e.primaryType === "html") {
+    return plain || (e.preview.html ? stripHtml(e.preview.html) : "");
+  }
+  return plain ?? "";
+});
 </script>
 
 <template>
@@ -54,9 +109,7 @@ const transferring = computed(() => {
         </p>
         <p v-if="entry.needsFileDownload" class="muted">{{ t("overlay.pendingDownload") }}</p>
       </div>
-      <pre v-else-if="entry.preview.text || entry.preview.html" class="text-block">{{
-        entry.preview.text || entry.preview.html
-      }}</pre>
+      <pre v-else-if="textPreview" class="text-block">{{ textPreview }}</pre>
       <p v-else class="muted">{{ t("overlay.noPreview") }}</p>
     </div>
 
