@@ -2,6 +2,7 @@ import { t, type MsgKey } from "./i18n";
 
 const RULES: Array<{ test: RegExp; key: MsgKey }> = [
   { test: /expired|已过期/i, key: "err.tokenExpired" },
+  { test: /pair_mismatch|配对信息不一致/i, key: "err.pairMismatch" },
   { test: /token|配对码不正确/i, key: "err.tokenInvalid" },
   { test: /offline|设备离线/i, key: "err.offline" },
   { test: /trust_broken|信任失效/i, key: "err.trustBroken" },

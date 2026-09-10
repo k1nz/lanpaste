@@ -112,6 +112,7 @@
   "err.unavailable": "后端尚未就绪",
   "err.tokenInvalid": "配对码不正确",
   "err.tokenExpired": "配对码已过期",
+  "err.pairMismatch": "配对失败：两台设备的身份信息不一致，请重新配对",
   "err.offline": "设备离线",
   "err.trustBroken": "信任失效，需重新配对",
   "err.rejected": "对端拒绝接收",

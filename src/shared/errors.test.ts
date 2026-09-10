@@ -19,6 +19,10 @@ describe("localizeError", () => {
     expect(localizeError("trust_broken")).not.toBe(t("err.generic"));
   });
 
+  it("maps a pairing identity mismatch", () => {
+    expect(localizeError("pair_mismatch")).toBe(t("err.pairMismatch"));
+  });
+
   it("maps the Chinese strings the backend still emits", () => {
     expect(localizeError("设备离线")).toBe(t("err.offline"));
     expect(localizeError("条目不存在")).toBe(t("err.notFound"));

@@ -112,6 +112,7 @@
   "err.unavailable": "Backend is not ready",
   "err.tokenInvalid": "Incorrect pairing code",
   "err.tokenExpired": "Pairing code expired",
+  "err.pairMismatch": "Pairing failed: the two machines described themselves differently. Try again",
   "err.offline": "Device is offline",
   "err.trustBroken": "The other machine's identity no longer matches — pair it again",
   "err.rejected": "The other device refused",
