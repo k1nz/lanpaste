@@ -154,22 +154,36 @@ pub async fn submit_token(state: &AppState, instance_id: &str, token: &str) -> R
     Ok(())
 }
 
-pub async fn revoke_remote(state: &AppState, instance_id: &str) {
-    let device = state.with_store(|s| s.get_device(instance_id)).ok().flatten();
-    let Some(device) = device else {
-        return;
-    };
+/// Best-effort `POST /pair/revoke` to tell a peer to drop us. Returns an error
+/// only for the caller to log; the local device is removed regardless.
+pub async fn revoke_remote(state: &AppState, instance_id: &str) -> Result<(), String> {
+    let device = state
+        .with_store(|s| s.get_device(instance_id))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "device_removed".to_string())?;
     let (Some(host), Some(port)) = (device.host.clone(), device.port) else {
-        return;
+        // Never reached from this machine; nothing to revoke remotely.
+        return Ok(());
     };
-    let pin = client::pin_from_device(&device).ok();
-    let client = match client::http_client(pin) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let pin = client::pin_from_device(&device)?;
+    let client = client::http_client(Some(pin))?;
     let body = protocol::PairRevoke {
         instance_id: state.inner.identity.instance_id.clone(),
     };
+    // The server verifies these against the raw body bytes.
+    let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     let url = client::host_url(&host, port, "/pair/revoke");
-    let _ = client.post(url).json(&body).send().await;
+    let mut req = client.post(url);
+    for (k, v) in client::signed_headers(&state.inner.identity, &bytes) {
+        req = req.header(k, v);
+    }
+    let resp = req
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|_| "offline".to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("revoke rejected: {}", resp.status()));
+    }
+    Ok(())
 }

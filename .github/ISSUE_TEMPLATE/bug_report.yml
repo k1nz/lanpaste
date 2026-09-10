@@ -1,0 +1,75 @@
+name: Bug report
+description: Something in LanPaste does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most problems with LanPaste are networking: the machines cannot see each
+        other, or a transfer fails part way. The details below are what usually
+        decides which it is, so please fill them in.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: LanPaste version
+      description: Shown in Settings → About.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where it goes wrong
+      options:
+        - Pairing a device
+        - A device does not appear under Nearby
+        - Clipboard items do not arrive on the other machine
+        - A file transfer fails or stalls
+        - The overlay or its shortcut
+        - Settings
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: peers
+    attributes:
+      label: The other machine
+      description: Its OS, and whether it is on the same network (same Wi-Fi, or wired and wireless on the same router).
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: |
+        Both machines must be running and on the same local network. A VPN, a
+        guest network, or a router that isolates its clients will stop discovery
+        entirely — worth ruling out first. Any messages shown in the app are
+        useful; so is whether the problem survives a restart of both apps.
+    validations:
+      required: false

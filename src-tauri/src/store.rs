@@ -54,6 +54,15 @@ pub struct StoredPasteboard {
     pub preview_json: String,
 }
 
+/// One durable retry-queue row for `POST /sync/entry`.
+#[derive(Debug, Clone)]
+pub struct PendingSync {
+    pub pasteboard_id: String,
+    pub device_id: String,
+    pub attempts: i64,
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StoredDevice {
     pub instance_id: String,
@@ -144,6 +153,8 @@ impl Store {
                   pasteboard_id TEXT NOT NULL,
                   device_id TEXT NOT NULL,
                   created_at INTEGER NOT NULL,
+                  attempts INTEGER NOT NULL DEFAULT 0,
+                  last_error TEXT,
                   PRIMARY KEY (pasteboard_id, device_id)
                 );
                 CREATE TABLE IF NOT EXISTS settings (
@@ -158,6 +169,35 @@ impl Store {
                 "#,
             )
             .map_err(|e| format!("migrate: {e}"))?;
+        // Existing databases created before attempts/last_error existed upgrade in place.
+        self.add_column_if_missing("pending_sync", "attempts", "INTEGER NOT NULL DEFAULT 0")?;
+        self.add_column_if_missing("pending_sync", "last_error", "TEXT")?;
+        Ok(())
+    }
+
+    fn column_exists(&self, table: &str, column: &str) -> Result<bool, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| format!("table info: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("table info query: {e}"))?;
+        for row in rows {
+            if row.map_err(|e| format!("table info row: {e}"))? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn add_column_if_missing(&self, table: &str, column: &str, decl: &str) -> Result<(), String> {
+        if self.column_exists(table, column)? {
+            return Ok(());
+        }
+        self.conn
+            .execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+            .map_err(|e| format!("add column {table}.{column}: {e}"))?;
         Ok(())
     }
 
@@ -376,6 +416,10 @@ impl Store {
 
     pub fn delete_pasteboard(&mut self, id: &str) -> Result<(), String> {
         let items = self.get_items(id)?;
+        let partials: Vec<PathBuf> = items
+            .iter()
+            .map(|it| self.partial_download_path(&it.id))
+            .collect();
         let tx = self.conn.transaction().map_err(|e| format!("tx: {e}"))?;
         tx.execute("DELETE FROM pending_sync WHERE pasteboard_id = ?1", params![id])
             .map_err(|e| format!("del queue: {e}"))?;
@@ -383,7 +427,10 @@ impl Store {
             .map_err(|e| format!("del items: {e}"))?;
         tx.execute("DELETE FROM pasteboards WHERE id = ?1", params![id])
             .map_err(|e| format!("del pb: {e}"))?;
-        for item in items {
+        for (item, partial) in items.into_iter().zip(partials) {
+            // Drop any interrupted-download scratch for this item.
+            let _ = fs::remove_file(&partial);
+            let _ = fs::remove_file(partial.with_extension("etag"));
             if let Some(hash) = item.blob_hash {
                 tx.execute(
                     "UPDATE blobs SET refcount = MAX(refcount - 1, 0) WHERE hash = ?1",
@@ -532,20 +579,44 @@ impl Store {
     }
 
     pub fn ingest_file(&self, src: &Path) -> Result<(String, u64), String> {
-        let mut file = fs::File::open(src).map_err(|e| format!("open file: {e}"))?;
-        let mut hasher = Sha256::new();
-        let mut buf = [0u8; 65536];
-        let mut size = 0u64;
-        loop {
-            let n = file.read(&mut buf).map_err(|e| format!("read file: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buf[..n]);
-            size += n as u64;
-        }
-        let hash = hex::encode(hasher.finalize());
+        let (hash, size) = hash_file(src)?;
         self.ensure_blob_row(&hash, size, None, Some(src))?;
+        Ok((hash, size))
+    }
+
+    /// Where an in-progress download keeps its bytes. Partial files live under
+    /// a distinct `partial/` directory so they can never be mistaken for a
+    /// finished, content-addressed blob (and cleanup/GC never touch them).
+    pub fn partial_download_path(&self, item_id: &str) -> PathBuf {
+        let name = sanitize_file_name(Some(item_id));
+        self.blob_dir.join("partial").join(format!("{name}.part"))
+    }
+
+    /// Finalize a completed download: hash the partial, move its bytes into the
+    /// content-addressed blob store (reusing an identical existing blob), and
+    /// return `(hash, size)`. The partial file is removed either way.
+    pub fn commit_download(
+        &self,
+        partial: &Path,
+        expected_size: Option<u64>,
+    ) -> Result<(String, u64), String> {
+        let (hash, size) = hash_file(partial)?;
+        if let Some(expected) = expected_size {
+            if expected != size {
+                return Err("download_size_mismatch".into());
+            }
+        }
+        // Move the partial into place. `rename` is atomic and lives on the same
+        // filesystem; if an identical blob already exists (dedup) the partial is
+        // simply discarded and the existing blob is reused.
+        let dest = self.blob_dir.join(&hash);
+        if dest.exists() {
+            let _ = fs::remove_file(partial);
+        } else if fs::rename(partial, &dest).is_err() {
+            fs::copy(partial, &dest).map_err(|e| format!("copy blob: {e}"))?;
+            let _ = fs::remove_file(partial);
+        }
+        self.ensure_blob_row(&hash, size, None, None)?;
         Ok((hash, size))
     }
 
@@ -771,19 +842,52 @@ impl Store {
         Ok(())
     }
 
-    pub fn list_pending_sync(&self) -> Result<Vec<(String, String)>, String> {
+    pub fn list_pending_sync(&self) -> Result<Vec<PendingSync>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT pasteboard_id, device_id FROM pending_sync ORDER BY created_at")
+            .prepare("SELECT pasteboard_id, device_id, attempts, last_error FROM pending_sync ORDER BY created_at")
             .map_err(|e| format!("pending: {e}"))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_map([], |r| {
+                Ok(PendingSync {
+                    pasteboard_id: r.get(0)?,
+                    device_id: r.get(1)?,
+                    attempts: r.get(2)?,
+                    last_error: r.get(3)?,
+                })
+            })
             .map_err(|e| format!("pending query: {e}"))?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row.map_err(|e| format!("pending row: {e}"))?);
         }
         Ok(out)
+    }
+
+    /// Record one failed delivery attempt and return the new attempt count.
+    pub fn bump_pending_sync(
+        &self,
+        pasteboard_id: &str,
+        device_id: &str,
+        last_error: &str,
+    ) -> Result<i64, String> {
+        self.conn
+            .execute(
+                "UPDATE pending_sync SET attempts = attempts + 1, last_error = ?3
+                 WHERE pasteboard_id = ?1 AND device_id = ?2",
+                params![pasteboard_id, device_id, last_error],
+            )
+            .map_err(|e| format!("bump pending: {e}"))?;
+        let attempts: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT attempts FROM pending_sync WHERE pasteboard_id = ?1 AND device_id = ?2",
+                params![pasteboard_id, device_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("bump pending read: {e}"))?;
+        Ok(attempts.unwrap_or(0))
     }
 
     pub fn load_settings(&self) -> Result<AppSettings, String> {
@@ -1015,6 +1119,23 @@ pub fn content_hash_for(parts: &[(String, Vec<u8>)]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Stream a file through SHA-256 without loading it into memory.
+fn hash_file(path: &Path) -> Result<(String, u64), String> {
+    let mut file = fs::File::open(path).map_err(|e| format!("open file: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    let mut size = 0u64;
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("read file: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        size += n as u64;
+    }
+    Ok((hex::encode(hasher.finalize()), size))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1194,5 +1315,66 @@ mod tests {
         store.insert_pasteboard(&b, &[]).unwrap();
         assert!(!store.should_skip_duplicate_hash("hash-hello").unwrap());
         assert!(store.should_skip_duplicate_hash("hash-world").unwrap());
+    }
+
+    #[test]
+    fn pending_sync_legacy_table_migrates_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            // A v0.1.0 database: no attempts / last_error columns.
+            let conn = Connection::open(dir.path().join("lanpaste.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE pending_sync (
+                   pasteboard_id TEXT NOT NULL,
+                   device_id TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   PRIMARY KEY (pasteboard_id, device_id)
+                 );",
+            )
+            .unwrap();
+        }
+        let store = Store::open(dir.path()).unwrap();
+        store.enqueue_sync("p1", "d1").unwrap();
+        assert_eq!(store.bump_pending_sync("p1", "d1", "offline").unwrap(), 1);
+        assert_eq!(store.bump_pending_sync("p1", "d1", "offline").unwrap(), 2);
+        let pending = store.list_pending_sync().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].attempts, 2);
+        assert_eq!(pending[0].last_error.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn commit_download_moves_partial_into_blob_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let partial = store.partial_download_path("item-1");
+        std::fs::create_dir_all(partial.parent().unwrap()).unwrap();
+        std::fs::write(&partial, b"hello").unwrap();
+
+        let (hash, size) = store.commit_download(&partial, Some(5)).unwrap();
+        assert_eq!(size, 5);
+        assert!(!partial.exists(), "partial should be consumed");
+        assert_eq!(std::fs::read(store.blob_path(&hash)).unwrap(), b"hello");
+
+        // A second download of identical content dedups onto the same blob.
+        let partial2 = store.partial_download_path("item-2");
+        std::fs::write(&partial2, b"hello").unwrap();
+        let (hash2, _) = store.commit_download(&partial2, Some(5)).unwrap();
+        assert_eq!(hash, hash2);
+        assert!(!partial2.exists());
+    }
+
+    #[test]
+    fn commit_download_rejects_wrong_size_and_keeps_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let partial = store.partial_download_path("item-1");
+        std::fs::create_dir_all(partial.parent().unwrap()).unwrap();
+        std::fs::write(&partial, b"hi").unwrap();
+
+        let err = store.commit_download(&partial, Some(99)).unwrap_err();
+        assert_eq!(err, "download_size_mismatch");
+        // Kept so the next attempt can resume rather than restart.
+        assert_eq!(std::fs::read(&partial).unwrap(), b"hi");
     }
 }

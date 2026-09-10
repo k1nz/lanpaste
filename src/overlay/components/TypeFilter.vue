@@ -9,11 +9,13 @@ import { PASTE_TYPES } from "../typeMeta";
 const props = defineProps<{
   modelValue: PasteType | "all";
   open: boolean;
+  activeIndex: number;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: PasteType | "all"];
   "update:open": [open: boolean];
+  "update:activeIndex": [n: number];
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -26,6 +28,11 @@ const options = computed(() => [
   { value: "all" as const, label: t("overlay.allTypes") },
   ...PASTE_TYPES.map((value) => ({ value, label: typeLabel(value) })),
 ]);
+
+const activeId = computed(() => {
+  const opt = options.value[props.activeIndex];
+  return opt ? `type-opt-${opt.value}` : undefined;
+});
 
 function toggle() {
   emit("update:open", !props.open);
@@ -53,20 +60,25 @@ onUnmounted(() => document.removeEventListener("mousedown", onDoc));
     <button
       class="type-filter-btn"
       type="button"
+      role="combobox"
       :aria-expanded="open"
       aria-haspopup="listbox"
+      aria-controls="type-filter-listbox"
+      :aria-activedescendant="open ? activeId : undefined"
       @click="toggle"
     >
       <span>{{ label }}</span>
       <PhCaretDown :size="12" weight="regular" />
     </button>
-    <ul v-if="open" class="type-filter-menu" role="listbox">
+    <ul v-if="open" id="type-filter-listbox" class="type-filter-menu" role="listbox">
       <li
-        v-for="opt in options"
+        v-for="(opt, i) in options"
+        :id="`type-opt-${opt.value}`"
         :key="opt.value"
         role="option"
         :aria-selected="opt.value === modelValue"
-        :class="{ selected: opt.value === modelValue }"
+        :class="{ selected: opt.value === modelValue, active: i === activeIndex }"
+        @mouseenter="emit('update:activeIndex', i)"
         @click="pick(opt.value)"
       >
         {{ opt.label }}
@@ -122,6 +134,10 @@ onUnmounted(() => document.removeEventListener("mousedown", onDoc));
 }
 
 .type-filter-menu li:hover {
+  background: var(--color-elevated);
+}
+
+.type-filter-menu li.active:not(.selected) {
   background: var(--color-elevated);
 }
 

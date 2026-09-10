@@ -3,7 +3,6 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   PhClipboard,
-  PhCommand,
   PhFile,
   PhFileText,
   PhImage,
@@ -12,6 +11,9 @@ import {
   PhPalette,
 } from "@phosphor-icons/vue";
 import clipboardStill from "@/assets/clipboard-still.png";
+import codeThumb from "@/assets/code-thumb.png";
+import { OVERLAY_HEIGHT, OVERLAY_WIDTH } from "../constants";
+import Keycap from "./Keycap.vue";
 
 type ItemType = "url" | "color" | "image" | "text" | "file";
 
@@ -28,7 +30,7 @@ interface DemoItem {
 }
 
 const { t } = useI18n();
-const selectedId = ref("url");
+const selectedId = ref("image");
 
 const items: DemoItem[] = [
   {
@@ -42,7 +44,7 @@ const items: DemoItem[] = [
     id: "color",
     type: "color",
     titleKey: "hero.itemColor",
-    timeKey: "hero.time18m",
+    timeKey: "hero.time6m",
     sourceKey: "hero.sourceLocal",
     color: "#0A84FF",
   },
@@ -50,16 +52,38 @@ const items: DemoItem[] = [
     id: "image",
     type: "image",
     titleKey: "hero.itemImage",
-    timeKey: "hero.time41m",
+    timeKey: "hero.time18m",
     sourceKey: "hero.sourceOffice",
     image: clipboardStill,
+  },
+  {
+    id: "shot",
+    type: "image",
+    titleKey: "hero.itemShot",
+    timeKey: "hero.time27m",
+    sourceKey: "hero.sourceStudio",
+    image: codeThumb,
   },
   {
     id: "text",
     type: "text",
     titleKey: "hero.itemText",
-    timeKey: "hero.time1h",
+    timeKey: "hero.time41m",
     sourceKey: "hero.sourceStudio",
+  },
+  {
+    id: "ssh",
+    type: "text",
+    titleKey: "hero.itemSsh",
+    timeKey: "hero.time1h",
+    sourceKey: "hero.sourceOffice",
+  },
+  {
+    id: "env",
+    type: "text",
+    titleKey: "hero.itemEnv",
+    timeKey: "hero.time2h",
+    sourceKey: "hero.sourceLocal",
   },
   {
     id: "file",
@@ -99,7 +123,14 @@ function iconFor(type: ItemType) {
 </script>
 
 <template>
-  <div class="overlay" role="region" :aria-label="t('hero.overlayAria')">
+  <div
+    class="overlay-stage"
+    :style="{
+      '--overlay-w': `${OVERLAY_WIDTH}px`,
+      '--overlay-h': `${OVERLAY_HEIGHT}px`,
+    }"
+  >
+    <div class="overlay" role="region" :aria-label="t('hero.overlayAria')">
     <header class="search">
       <PhMagnifyingGlass :size="16" weight="regular" class="search-icon" />
       <span class="placeholder">{{ t("hero.overlaySearch") }}</span>
@@ -146,12 +177,13 @@ function iconFor(type: ItemType) {
             <div class="color-swatch" :style="{ background: selected.color }" />
             <code>{{ selected.color }}</code>
           </div>
-          <img
-            v-else-if="selected.image"
-            :src="selected.image"
-            :alt="t(selected.titleKey)"
-            class="preview-image"
-          />
+          <div v-else-if="selected.image" class="image-block">
+            <img
+              :src="selected.image"
+              :alt="t(selected.titleKey)"
+              class="preview-image"
+            />
+          </div>
           <p v-else-if="selected.type === 'file'" class="file-block">
             <span class="file-name">{{ t(selected.titleKey) }}</span>
             <span class="muted">{{ t("hero.fileSize") }} · {{ t("hero.pending") }}</span>
@@ -184,25 +216,43 @@ function iconFor(type: ItemType) {
       </div>
       <span class="bar-action">
         {{ t("hero.overlayPaste") }}
-        <kbd>↵</kbd>
+        <Keycap k="enter" decorative />
       </span>
+      <span class="bar-sep" aria-hidden="true" />
       <span class="bar-action">
         {{ t("hero.overlayActions") }}
-        <span class="chord"><PhCommand :size="12" weight="regular" />K</span>
+        <span class="chord">
+          <Keycap k="command" decorative />
+          <Keycap k="K" decorative />
+        </span>
       </span>
     </footer>
+  </div>
   </div>
 </template>
 
 <style scoped>
+.overlay-stage {
+  container-type: inline-size;
+  width: min(100%, var(--overlay-w, 780px));
+  aspect-ratio: 780 / 520;
+  overflow: hidden;
+}
+
 .overlay {
   --ov-bg: rgb(28 28 30 / 0.82);
   --ov-fg: #ededef;
   --ov-muted: #8a8f98;
   --ov-line: rgb(255 255 255 / 0.08);
   --ov-elev: rgb(255 255 255 / 0.06);
-  width: min(100%, 720px);
-  height: 460px;
+  --keycap-bg: rgb(255 255 255 / 0.1);
+  --keycap-border: rgb(255 255 255 / 0.14);
+  --keycap-fg: #c8ccd4;
+  --keycap-shine: rgb(255 255 255 / 0.16);
+  width: var(--overlay-w, 780px);
+  height: var(--overlay-h, 520px);
+  transform-origin: top left;
+  transform: scale(calc(100cqw / var(--overlay-w, 780px)));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -212,7 +262,7 @@ function iconFor(type: ItemType) {
   border-radius: 12px;
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.12),
-    0 18px 60px rgb(0 0 0 / 0.45);
+    0 24px 72px rgb(0 0 0 / 0.52);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
   font-family:
@@ -355,8 +405,9 @@ function iconFor(type: ItemType) {
 }
 
 .color-swatch {
-  height: 96px;
+  height: 120px;
   border-radius: 8px;
+  border: 1px solid var(--ov-line);
 }
 
 .color-block code,
@@ -366,11 +417,18 @@ function iconFor(type: ItemType) {
   font-size: 12px;
 }
 
+.image-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
 .preview-image {
-  width: 100%;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 8px;
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .file-block,
@@ -384,6 +442,10 @@ function iconFor(type: ItemType) {
 .muted {
   color: var(--ov-muted);
   font-size: 12px;
+}
+
+.info {
+  flex-shrink: 0;
 }
 
 .info h3 {
@@ -443,26 +505,15 @@ function iconFor(type: ItemType) {
   font-size: 12px;
 }
 
-kbd,
+.bar-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--ov-line);
+}
+
 .chord {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  color: var(--ov-muted);
-  font-size: 11px;
-}
-
-@media (max-width: 767px) {
-  .overlay {
-    height: 400px;
-  }
-
-  .split {
-    grid-template-columns: 1fr;
-  }
-
-  .preview {
-    display: none;
-  }
+  gap: 3px;
 }
 </style>

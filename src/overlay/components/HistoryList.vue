@@ -12,6 +12,7 @@ import {
 
 const props = defineProps<{
   items: HistoryEntry[];
+  loading: boolean;
   selectedId: string | null;
   progress: TransferProgressPayload | null;
 }>();
@@ -98,11 +99,15 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
   <div
     class="list-scroll lp-scroll"
     :ref="onListScrollSetup"
+    id="history-listbox"
     role="listbox"
-    :aria-activedescendant="selectedId ? `row-${selectedId}` : undefined"
     @scroll="onScroll"
   >
-    <div v-if="items.length === 0" class="empty">
+    <div v-if="loading && items.length === 0" class="empty" aria-busy="true">
+      <p class="loading">{{ t("overlay.loading") }}</p>
+    </div>
+
+    <div v-else-if="items.length === 0" class="empty">
       <p class="empty-title">{{ t("overlay.emptyTitle") }}</p>
       <button type="button" class="empty-hint" @click="emit('clearFilters')">
         {{ t("overlay.emptyHint") }}
@@ -189,6 +194,12 @@ function onListScrollSetup(el: Element | { $el?: Element } | null) {
   margin: 0;
   font-size: 15px;
   color: var(--color-foreground);
+}
+
+.loading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-muted);
 }
 
 .empty-hint {

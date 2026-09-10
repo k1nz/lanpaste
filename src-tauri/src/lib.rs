@@ -84,6 +84,7 @@ pub fn run() {
                     incoming_pair: Mutex::new(None),
                     outgoing_pair: Mutex::new(None),
                     inflight_blobs: Mutex::new(HashSet::new()),
+                    download_locks: Mutex::new(HashMap::new()),
                     last_change_count: Mutex::new(
                         clipboard::pasteboard_change_count().unwrap_or(0),
                     ),
@@ -262,7 +263,12 @@ fn start_clipboard_watcher(state: AppState) {
                 let id = result.id;
                 let st = state.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = net::auto_sync_new_entry(&st, &id).await;
+                    // Permanent per-device failures come back as an error; log
+                    // them rather than discarding silently. Transient failures
+                    // are already persisted to the retry queue.
+                    if let Err(e) = net::auto_sync_new_entry(&st, &id).await {
+                        eprintln!("auto sync {id}: {e}");
+                    }
                 });
             }
         }

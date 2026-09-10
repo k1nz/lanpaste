@@ -2,6 +2,7 @@
 import { PhCaretRight, PhCheck } from "@phosphor-icons/vue";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import type { HistoryEntry, PairedDevice } from "../../shared/types";
+import Keycap from "../../shared/Keycap.vue";
 import { t } from "../../shared/i18n";
 import { buildActionItems, type ActionId, type MenuItem } from "../actions";
 
@@ -15,6 +16,7 @@ const props = defineProps<{
   activeIndex: number;
   submenuOpen: boolean;
   submenuIndex: number;
+  confirmDelete: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -50,6 +52,18 @@ watch(
   },
 );
 
+watch(
+  () => props.devices.length,
+  (len) => {
+    if (!props.submenuOpen) return;
+    if (len === 0) {
+      emit("update:submenuOpen", false);
+    } else if (props.submenuIndex >= len) {
+      emit("update:submenuIndex", len - 1);
+    }
+  },
+);
+
 onMounted(async () => {
   await nextTick();
   root.value?.focus();
@@ -77,7 +91,22 @@ function onItemClick(item: MenuItem, index: number) {
     role="menu"
     tabindex="-1"
   >
-    <template v-if="!submenuOpen">
+    <template v-if="confirmDelete">
+      <p class="confirm" role="none">{{ t("overlay.deleteConfirm") }}</p>
+      <button
+        type="button"
+        class="menu-item destructive"
+        role="menuitem"
+        @click="emit('run', 'delete')"
+      >
+        <span>{{ t("overlay.delete") }}</span>
+        <Keycap k="enter" decorative />
+      </button>
+      <button type="button" class="menu-item" role="menuitem" @click="emit('close')">
+        <span>{{ t("overlay.cancel") }}</span>
+      </button>
+    </template>
+    <template v-else-if="!submenuOpen">
       <button
         v-for="(item, i) in items"
         :key="item.id"
@@ -91,7 +120,7 @@ function onItemClick(item: MenuItem, index: number) {
       >
         <span>{{ item.label }}</span>
         <PhCaretRight v-if="item.submenu" :size="12" weight="regular" />
-        <span v-else-if="item.id === 'paste'" class="hint">↵</span>
+        <Keycap v-else-if="item.id === 'paste'" k="enter" decorative />
       </button>
     </template>
     <template v-else>
@@ -103,9 +132,8 @@ function onItemClick(item: MenuItem, index: number) {
         class="menu-item"
         role="menuitem"
         :class="{ active: i === submenuIndex }"
-        :disabled="!dev.online || dev.trustBroken"
         @mouseenter="emit('update:submenuIndex', i)"
-        @click="dev.online && !dev.trustBroken && emit('syncDevice', dev.instanceId)"
+        @click="emit('syncDevice', dev.instanceId)"
       >
         <span class="dev-name">
           <span class="dot" :class="{ on: dev.online }" />
@@ -176,11 +204,26 @@ function onItemClick(item: MenuItem, index: number) {
   color: rgba(255, 255, 255, 0.8);
 }
 
+.menu-item.active :deep(.keycap),
+.menu-item:hover:not(:disabled) :deep(.keycap) {
+  background: rgb(255 255 255 / 0.22);
+  border-color: rgb(255 255 255 / 0.28);
+  color: #fff;
+  box-shadow: none;
+}
+
 .empty {
   margin: 0;
   padding: 10px;
   font-size: 12px;
   color: var(--color-muted);
+}
+
+.confirm {
+  margin: 0;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  color: var(--color-foreground);
 }
 
 .dev-name {

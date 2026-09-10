@@ -52,13 +52,31 @@ export async function invokeResult(
   }
 }
 
-export async function listHistory(
+/** A list load that distinguishes a failed fetch from a genuinely empty result. */
+export type LoadResult<T> = { ok: true; items: T[] } | { ok: false; error: string };
+
+async function invokeList<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<LoadResult<T>> {
+  // Outside Tauri there is no backend at all; treat it as an empty, successful load
+  // so the browser preview is not permanently covered by an error banner.
+  if (!isTauri()) return { ok: true, items: [] };
+  try {
+    return { ok: true, items: (await invoke<T[]>(cmd, args)) ?? [] };
+  } catch (err) {
+    console.warn(`[lanpaste] ${cmd} failed`, err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+export function listHistory(
   query?: string,
   typeFilter: PasteType | "all" = "all",
-): Promise<HistoryEntry[]> {
+): Promise<LoadResult<HistoryEntry>> {
   const args: Record<string, unknown> = { typeFilter };
   if (query && query.trim()) args.query = query.trim();
-  return (await invokeSafe<HistoryEntry[]>("list_history", args)) ?? [];
+  return invokeList<HistoryEntry>("list_history", args);
 }
 
 export async function getEntry(id: string): Promise<HistoryEntry | null> {
@@ -93,12 +111,12 @@ export function revealInFinder(id: string) {
   return invokeResult("reveal_in_finder", { id });
 }
 
-export async function listNearby(): Promise<NearbyDevice[]> {
-  return (await invokeSafe<NearbyDevice[]>("list_nearby")) ?? [];
+export function listNearby(): Promise<LoadResult<NearbyDevice>> {
+  return invokeList<NearbyDevice>("list_nearby");
 }
 
-export async function listPaired(): Promise<PairedDevice[]> {
-  return (await invokeSafe<PairedDevice[]>("list_paired")) ?? [];
+export function listPaired(): Promise<LoadResult<PairedDevice>> {
+  return invokeList<PairedDevice>("list_paired");
 }
 
 export function startPair(instanceId: string) {

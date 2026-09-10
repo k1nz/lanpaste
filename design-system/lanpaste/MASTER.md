@@ -11,7 +11,7 @@
 **Source:** ui-ux-pro-max (`--design-system`, variance 3 / motion 3 / density 8)  
 **Visual north star:** Raycast Clipboard History (dark command palette), not a marketing landing page.
 
-The raw `--design-system` output recommended Exaggerated Minimalism + landing CTA + vault green. **Those defaults are rejected.** This file is the overridden source of truth for a dense, keyboard-first macOS overlay.
+The raw `--design-system` output recommended Exaggerated Minimalism + landing CTA + vault green. **Those defaults are rejected.** This file is the overridden source of truth for a dense, keyboard-first macOS and Windows overlay.
 
 **Design Dials:** Variance 3/10 (Centered / Minimal) | Motion 3/10 (Subtle) | Density 8/10 (Dense)
 
@@ -92,7 +92,7 @@ No stacked card shadows, no 3D, no ambient animated blobs.
 - Left: type glyph (Phosphor, 16px, `regular` weight) or thumbnail.
 - Middle: single-line truncated title.
 - Right (optional): relative time, muted.
-- Time section labels (`Today` / `Yesterday` / date): 11px, `--color-muted`, sticky.
+- Time section labels (`Today` / `Yesterday` / date): 11px, `--color-muted`.
 
 ### Buttons
 
@@ -175,6 +175,9 @@ Subtle only. No GSAP ScrollTrigger (this is not a landing page).
 - Settings panes and pairing prompt: `defineAsyncComponent` is fine; overlay shell stays eager.
 - All clickable elements: `cursor: pointer`.
 - Visible `:focus-visible` ring using `--color-ring`.
+- Every user-visible string lives in `src/locales/*.json` and is read through `t()` — never hard-code copy in a component.
+- `en-US.json` and `zh-CN.json` must carry the same key set (key-parity test in `src-tauri/src/i18n.rs`).
+- Design docs reference the key name (`overlay.clipboardHistory`), not a literal string in one language, as the spec.
 
 ---
 
@@ -198,7 +201,7 @@ Subtle only. No GSAP ScrollTrigger (this is not a landing page).
 - [ ] Looks like Raycast clipboard: search, mixed-type chronological list, preview, bottom actions
 - [ ] No emojis as icons (Phosphor only)
 - [ ] Contrast: primary text ≥ 4.5:1, muted ≥ 3:1 on `--color-surface-solid`
-- [ ] Keyboard: ↑↓, Enter paste+close, Esc close, ⌘K actions — no keyboard trap
+- [ ] Keyboard: ↑↓, Enter paste+close, Esc close, ⌘K / Ctrl+K actions — no keyboard trap
 - [ ] Empty search: “无结果” plus clear-filter hint, not a blank pane
 - [ ] `prefers-reduced-motion` respected
 - [ ] Overlay verified at 780×520; settings at ~720×560

@@ -1,6 +1,6 @@
-# Overlay (⌘⇧V)
+# Overlay (⌥⇧V / Ctrl+Shift+V)
 
-Overrides `MASTER.md` for the clipboard history palette.
+Overrides `MASTER.md` for the clipboard history palette. Default shortcut is Option+Shift+V on macOS and Ctrl+Shift+V on Windows; it is user-editable in **Settings → Shortcuts**.
 
 ## Purpose
 
@@ -9,12 +9,12 @@ Keyboard-first Raycast Clipboard History: one chronological list of all types, p
 ## Layout (fixed)
 
 ```
-┌ search ─────────────── 全部类型 ▾ ┐
+┌ search ─────────────── overlay.allTypes ▾ ┐
 │ Today                              │
 │  row                               │  preview
 │  row (selected)                    │  Information
 │ Yesterday                          │
-├ Clipboard History · 粘贴到 App · ⌘K ┤
+├ Clipboard History · 粘贴到 App · ⌘K / Ctrl+K ┤
 ```
 
 - No back-stack in v1 except closing nested Actions. Do not add a Raycast "root command" home.
@@ -25,12 +25,15 @@ Keyboard-first Raycast Clipboard History: one chronological list of all types, p
 - Open: focus search, restore last selected id if still present, else first row.
 - Enter / bottom primary action: paste into frontmost app, then hide window.
 - Esc: hide, do not paste.
+- Click away / lose focus: hide the window (blur dismisses).
 - Right-click and ⌘K share the same action list; include **同步到**.
 - List is virtualized when > 200 rows.
-- File rows that still need download: show size + pending; selecting them does not start transfer until Paste.
+- Remote file rows: show name + size as pending; selecting one does not start the transfer — only Paste (Enter) fetches the bytes.
 
 ## Copy
 
-Search placeholder: `搜索历史…`  
-Empty: `无匹配条目` + `试试清空类型过滤`  
-Bottom leading label: `Clipboard History`
+Search placeholder: `overlay.searchPlaceholder`  
+Empty: `overlay.emptyTitle` + `overlay.emptyHint`  
+Bottom leading label: `overlay.clipboardHistory`
+
+Each key has a zh-CN value in `src/locales/zh-CN.json` and an en-US value in `src/locales/en-US.json` — e.g. `overlay.clipboardHistory` is 剪贴板历史 in zh-CN and "Clipboard History" in en-US. Both catalogues carry the same key set.

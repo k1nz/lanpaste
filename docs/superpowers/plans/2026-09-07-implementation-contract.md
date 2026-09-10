@@ -2,6 +2,8 @@
 
 前后端必须遵守本文件与 `src/shared/types.ts`。不要各写一套字段名。
 
+> 本文件记录的是 2026-09-07 的约定。若与今天的代码不一致，以 `src/shared/types.ts` 与实际代码为准。
+
 ## 窗口
 
 | label | URL | 尺寸 | 装饰 |
@@ -9,9 +11,9 @@
 | overlay | `/?window=overlay` | 780×520 | 无标题栏、始终置顶、启动时隐藏 |
 | settings | `/?window=settings` | 720×560 | 有标题栏、启动时隐藏 |
 | pairing-show | `/?window=pairing-show` | 360×220 | 无标题栏、始终置顶、隐藏 |
-| pairing-input | `/?window=pairing-input` | 400×200 | 无标题栏、始终置顶、隐藏 |
+| pairing-input | `/?window=pairing-input` | 400×220 | 无标题栏、始终置顶、隐藏 |
 
-没有 `main` 窗口。托盘左键显示 overlay；菜单：打开历史、设置、退出。全局快捷键默认 `Cmd+Shift+V`。
+没有 `main` 窗口。托盘左键**切换** overlay（`ipc::toggle_overlay`）；菜单：打开历史、设置、退出。全局快捷键默认 macOS `Option+Shift+V`、其他平台 `Control+Shift+V`（`src-tauri/src/types.rs` 的 `DEFAULT_SHORTCUT`）。
 
 ## IPC commands（camelCase JSON）
 
@@ -48,6 +50,7 @@
 - `pairing-input` payload `{ instanceId: string, deviceName: string }`
 - `transfer-progress` payload `{ id: string, received: number, total: number }`
 - `overlay-shown`
+- `locale-changed` payload 为解析后的语言码（`string`，如 `"zh-CN"` / `"en-US"`）
 
 ## Rust 模块
 

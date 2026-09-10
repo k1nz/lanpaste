@@ -50,17 +50,50 @@ export function formatBytes(n: number): string {
   return `${gb.toFixed(gb < 10 ? 1 : 0)} GB`;
 }
 
-export function formatShortcut(raw: string): string {
+export type ShortcutPart =
+  | "command"
+  | "option"
+  | "shift"
+  | "control"
+  | "enter"
+  | string;
+
+const SHORTCUT_NAMES: Record<string, string> = {
+  command: "Command",
+  option: "Option",
+  shift: "Shift",
+  control: "Ctrl",
+  enter: "Enter",
+};
+
+function isAppleNavigator(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
+}
+
+/** Split a Tauri shortcut string into keycap tokens. */
+export function parseShortcut(raw: string): ShortcutPart[] {
   return raw
-    .replace(/CommandOrControl/gi, "⌘")
-    .replace(/Command|Cmd|Meta/gi, "⌘")
-    .replace(/Shift/gi, "⇧")
-    .replace(/Alt|Option/gi, "⌥")
-    .replace(/Control|Ctrl/gi, "⌃")
-    .replace(/Key([A-Z])/gi, "$1")
-    .replace(/Digit([0-9])/g, "$1")
-    .replace(/Arrow(Up|Down|Left|Right)/gi, "$1")
-    .replace(/\s*\+\s*/g, "");
+    .split(/\s*\+\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      if (/^CommandOrControl$/i.test(part)) return isAppleNavigator() ? "command" : "control";
+      if (/^(Command|Cmd|Meta)$/i.test(part)) return "command";
+      if (/^(Option|Alt)$/i.test(part)) return "option";
+      if (/^Shift$/i.test(part)) return "shift";
+      if (/^(Control|Ctrl)$/i.test(part)) return "control";
+      if (/^(Enter|Return)$/i.test(part)) return "enter";
+      const key = part.replace(/^Key/i, "").replace(/^Digit/i, "");
+      if (/^Arrow(Up|Down|Left|Right)$/i.test(key)) return key.slice(5);
+      return key.length === 1 ? key.toUpperCase() : key;
+    });
+}
+
+export function formatShortcut(raw: string): string {
+  return parseShortcut(raw)
+    .map((part) => SHORTCUT_NAMES[part] ?? part)
+    .join(" ");
 }
 
 const MODIFIER_KEYS = new Set([
