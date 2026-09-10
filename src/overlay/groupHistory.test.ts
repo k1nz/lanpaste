@@ -65,7 +65,9 @@ describe("flattenGroups", () => {
     const rows = flattenGroups([groupHistory([entry("x", hoursAgo(1))])[0]]);
 
     expect(rows.map((r) => r.kind)).toEqual(["header", "item"]);
-    expect(rows[0].label).toBe("Today");
+    const [header] = rows;
+    if (header.kind !== "header") throw new Error("expected a header row first");
+    expect(header.label).toBe("Today");
     expect(rows[1].key).toBe("x");
   });
 
