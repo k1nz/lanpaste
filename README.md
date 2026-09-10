@@ -15,7 +15,7 @@ LanPaste is a clipboard for the computers on your desk. It connects Mac and Wind
 
 ## Getting started
 
-1. **Install LanPaste on both computers.** Download the appropriate build for each platform from [Releases](https://github.com/k1nz/lanpaste/releases). The application is not yet signed, so the system may ask you to allow it on first launch — see [First launch](#first-launch).
+1. **Install LanPaste on both computers.** Download the appropriate build for each platform from [Releases](https://github.com/k1nz/lanpaste/releases), or start from the [download page](https://k1nz.github.io/lanpaste/). The application is not yet signed, so the system may ask you to allow it on first launch — see [First launch](#first-launch).
 2. **Pair the machines.** Open **Settings** (from the tray menu, or press `⌘,` / `Ctrl+,` inside the overlay), go to **Devices**, and the other machine should appear under *Nearby*. Click **Add**, then enter the 6-digit code shown on the other screen.
 3. **Done.** Copy on one machine, paste on the other. Each machine needs to be paired only once.
 
@@ -81,3 +81,11 @@ To compile it yourself:
 npm install
 npx tauri dev
 ```
+
+To produce a release build:
+
+```bash
+npx tauri build
+```
+
+The marketing site lives in `site/` and is built separately (`cd site && npm install && npm run build`); it is not part of the desktop build.

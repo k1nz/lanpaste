@@ -15,7 +15,7 @@ LanPaste 是面向你电脑桌面的剪贴板工具，让同一 Wi‑Fi 或有�
 
 ## 快速上手
 
-1. **在两台设备上安装 LanPaste。** 前往 [Releases](https://github.com/k1nz/lanpaste/releases) 下载对应平台的版本。应用尚未签名，首次启动时系统可能会要求你允许运行——详见下文[首次启动](#首次启动)。
+1. **在两台设备上安装 LanPaste。** 前往 [Releases](https://github.com/k1nz/lanpaste/releases) 下载对应平台的版本，也可以从[下载页](https://k1nz.github.io/lanpaste/)开始。应用尚未签名，首次启动时系统可能会要求你允许运行——详见下文[首次启动](#首次启动)。
 2. **配对设备。** 打开**设置**（托盘菜单，或在浮层中按 `⌘,` / `Ctrl+,`），进入**设备**，在**附近**列表中应能看到另一台设备。点击**添加**，输入对方屏幕上显示的 6 位数字验证码。
 3. **完成。** 在一台设备上复制，即可在另一台设备上粘贴。每台设备只需配对一次。
 
@@ -81,3 +81,11 @@ LanPaste 不设账号，也不连接任何服务器；内容只在你已配对�
 npm install
 npx tauri dev
 ```
+
+如需构建发布版本：
+
+```bash
+npx tauri build
+```
+
+营销站点位于 `site/`，需单独构建（`cd site && npm install && npm run build`），不属于桌面端构建的一部分。
