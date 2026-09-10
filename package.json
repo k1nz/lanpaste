@@ -7,6 +7,10 @@
     "dev": "vite",
     "dev:tauri": "tauri dev",
     "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "i18n:parity": "node scripts/i18n-parity.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "site": "pnpm --dir site dev"
@@ -22,6 +26,7 @@
     "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
+    "vitest": "^5.0.0",
     "vue-tsc": "^3.3.5"
   }
 }
