@@ -2,8 +2,9 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { t } from "../../shared/i18n";
 import { localizeError } from "../../shared/errors";
-import { eventToShortcut, formatShortcut } from "../../shared/format";
+import { eventToShortcut, formatShortcut, parseShortcut } from "../../shared/format";
 import { DEFAULT_SETTINGS, getSettings, updateSettings } from "../../shared/ipc";
+import Keycap from "../../shared/Keycap.vue";
 
 const shortcut = ref(DEFAULT_SETTINGS.overlayShortcut);
 const recording = ref(false);
@@ -12,6 +13,7 @@ const error = ref("");
 const recorder = ref<HTMLButtonElement | null>(null);
 
 const isDefault = computed(() => shortcut.value === DEFAULT_SETTINGS.overlayShortcut);
+const shortcutParts = computed(() => parseShortcut(shortcut.value));
 
 function stopRecording() {
   recording.value = false;
@@ -101,14 +103,17 @@ onUnmounted(() => {
         <button
           ref="recorder"
           type="button"
-          class="kbd"
+          class="recorder"
           :class="{ recording }"
           :aria-label="t('settings.shortcuts.edit')"
           :aria-pressed="recording"
           :disabled="saving"
           @click="toggleRecording"
         >
-          {{ recording ? t("settings.shortcuts.recording") : formatShortcut(shortcut) }}
+          <span v-if="recording">{{ t("settings.shortcuts.recording") }}</span>
+          <span v-else class="keys" :aria-label="formatShortcut(shortcut)">
+            <Keycap v-for="part in shortcutParts" :key="part" :k="part" decorative />
+          </span>
         </button>
       </div>
     </div>
@@ -162,11 +167,12 @@ onUnmounted(() => {
   color: var(--color-foreground);
 }
 
-.kbd {
+.recorder {
   font-family: var(--font-ui);
   font-size: 13px;
   min-width: 72px;
-  padding: 4px 8px;
+  min-height: 28px;
+  padding: 4px 6px;
   border-radius: 6px;
   border: 1px solid var(--color-border);
   background: var(--color-elevated);
@@ -174,14 +180,21 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.kbd.recording {
+.recorder.recording {
   border-color: var(--color-accent);
   color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent);
 }
 
-.kbd:disabled {
+.recorder:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.keys {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
 }
 </style>

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { PhClipboard, PhCommand } from "@phosphor-icons/vue";
+import { PhClipboard } from "@phosphor-icons/vue";
 import { computed } from "vue";
+import Keycap from "../../shared/Keycap.vue";
 import { t } from "../../shared/i18n";
+import { isApplePlatform } from "../../shared/ipc";
 
 const props = defineProps<{
   frontmost: string;
@@ -16,6 +18,8 @@ const emit = defineEmits<{
 const pasteLabel = computed(() =>
   props.frontmost ? t("overlay.pasteTo", { app: props.frontmost }) : t("overlay.paste"),
 );
+
+const actionMod = isApplePlatform() ? "command" : "control";
 </script>
 
 <template>
@@ -31,13 +35,14 @@ const pasteLabel = computed(() =>
       @click="emit('paste')"
     >
       <span>{{ pasteLabel }}</span>
-      <kbd>↵</kbd>
+      <Keycap k="enter" decorative />
     </button>
+    <span class="bar-sep" aria-hidden="true" />
     <button type="button" class="bar-action" @click="emit('actions')">
       <span>{{ t("overlay.actions") }}</span>
       <span class="chord">
-        <PhCommand :size="12" weight="regular" />
-        <span>K</span>
+        <Keycap :k="actionMod" decorative />
+        <Keycap k="K" decorative />
       </span>
     </button>
   </footer>
@@ -88,13 +93,15 @@ const pasteLabel = computed(() =>
   cursor: not-allowed;
 }
 
-kbd,
+.bar-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--color-border);
+}
+
 .chord {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  color: var(--color-muted);
-  font-family: var(--font-ui);
-  font-size: 11px;
+  gap: 3px;
 }
 </style>

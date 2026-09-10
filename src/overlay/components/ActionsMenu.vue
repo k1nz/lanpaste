@@ -2,6 +2,7 @@
 import { PhCaretRight, PhCheck } from "@phosphor-icons/vue";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import type { HistoryEntry, PairedDevice } from "../../shared/types";
+import Keycap from "../../shared/Keycap.vue";
 import { t } from "../../shared/i18n";
 import { buildActionItems, type ActionId, type MenuItem } from "../actions";
 
@@ -91,7 +92,7 @@ function onItemClick(item: MenuItem, index: number) {
       >
         <span>{{ item.label }}</span>
         <PhCaretRight v-if="item.submenu" :size="12" weight="regular" />
-        <span v-else-if="item.id === 'paste'" class="hint">↵</span>
+        <Keycap v-else-if="item.id === 'paste'" k="enter" decorative />
       </button>
     </template>
     <template v-else>
@@ -174,6 +175,14 @@ function onItemClick(item: MenuItem, index: number) {
 .menu-item.active .hint,
 .menu-item:hover:not(:disabled) .hint {
   color: rgba(255, 255, 255, 0.8);
+}
+
+.menu-item.active :deep(.keycap),
+.menu-item:hover:not(:disabled) :deep(.keycap) {
+  background: rgb(255 255 255 / 0.22);
+  border-color: rgb(255 255 255 / 0.28);
+  color: #fff;
+  box-shadow: none;
 }
 
 .empty {
