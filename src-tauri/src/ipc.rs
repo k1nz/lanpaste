@@ -232,7 +232,11 @@ pub fn update_device_flags(
 
 #[tauri::command]
 pub async fn remove_device(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
-    net::revoke_remote(&state, &instance_id).await;
+    // Best-effort remote revocation: dropping the local pin is the primary
+    // action and must happen even if the peer cannot be reached.
+    if let Err(e) = net::revoke_remote(&state, &instance_id).await {
+        eprintln!("revoke {}: {e}", instance_id);
+    }
     state.with_store(|s| s.remove_device(&instance_id))?;
     state.emit_devices();
     Ok(())

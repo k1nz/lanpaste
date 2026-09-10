@@ -33,6 +33,9 @@ pub struct Inner {
     pub incoming_pair: Mutex<Option<IncomingPair>>,
     pub outgoing_pair: Mutex<Option<OutgoingPair>>,
     pub inflight_blobs: Mutex<HashSet<String>>,
+    /// Per-item locks so two overlapping downloads of the same file cannot
+    /// interleave writes into the same partial file.
+    pub download_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub last_change_count: Mutex<i64>,
     pub suppress_change_count: Mutex<i64>,
     pub last_frontmost: Mutex<Option<String>>,
@@ -96,8 +99,20 @@ impl AppState {
         f(&mut store)
     }
 
-    pub fn remember_clipboard_write(&self, count: i64) {
-        if let Ok(mut g) = self.inner.suppress_change_count.lock() {
+    /// Serialize downloads of a single item. The returned lock must be held for
+    /// the whole download so partial-file writes never interleave.
+    pub fn download_lock(&self, item_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut g = self
+            .inner
+            .download_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        g.entry(item_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    pub fn remember_clipboard_write(&self, count: i64) {        if let Ok(mut g) = self.inner.suppress_change_count.lock() {
             *g = count;
         }
         if let Ok(mut g) = self.inner.last_change_count.lock() {

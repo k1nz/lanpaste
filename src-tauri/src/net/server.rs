@@ -43,6 +43,27 @@ struct Auth {
     instance_id: String,
 }
 
+/// Keeps a blob marked in-flight for exactly as long as its response stream may
+/// still hand out bytes. Dropped when the stream finishes, when the client
+/// disconnects, or when the response is dropped — including on panic — because
+/// the guard lives inside the stream.
+struct InflightGuard {
+    state: AppState,
+    hash: String,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let mut g = self
+            .state
+            .inner
+            .inflight_blobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        g.remove(&self.hash);
+    }
+}
+
 fn auth_paired(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Result<Auth, (StatusCode, String)> {
     let instance = header_str(headers, "x-lanpaste-instance").ok_or((
         StatusCode::UNAUTHORIZED,
@@ -118,7 +139,7 @@ async fn pair_confirm(
     State(state): State<AppState>,
     Json(body): Json<PairConfirm>,
 ) -> Result<Json<PairConfirmResponse>, (StatusCode, String)> {
-    let pending = {
+    {
         let mut g = state
             .inner
             .incoming_pair
@@ -128,12 +149,11 @@ async fn pair_confirm(
             .as_mut()
             .ok_or((StatusCode::BAD_REQUEST, "token_expired".into()))?;
         validate_token(pending, now_ms(), &body.token).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-        if pending.peer_instance_id != body.instance_id {
-            return Err((StatusCode::BAD_REQUEST, "token_invalid".into()));
-        }
+        // The confirm step must echo exactly what the request step told us to
+        // expect; otherwise a caller could pin an arbitrary key/cert.
+        validate_pair_confirm(pending, &body).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
         pending.used = true;
-        pending.clone()
-    };
+    }
 
     let device = StoredDevice {
         instance_id: body.instance_id.clone(),
@@ -158,7 +178,6 @@ async fn pair_confirm(
         crate::state::hide_pairing_windows(&handle);
     }
 
-    let _ = pending;
     Ok(Json(PairConfirmResponse {
         instance_id: state.inner.identity.instance_id.clone(),
         name: state.inner.device_name.clone(),
@@ -168,13 +187,55 @@ async fn pair_confirm(
     }))
 }
 
+/// Reject a confirm whose identity claims differ from the ones captured when
+/// the pairing request arrived, or which are missing/malformed.
+fn validate_pair_confirm(pending: &IncomingPair, body: &PairConfirm) -> Result<(), String> {
+    if pending.peer_instance_id != body.instance_id
+        || pending.peer_name != body.name
+        || pending.peer_fingerprint != body.fingerprint
+        || pending.peer_public_key != body.public_key
+        || pending.peer_cert_der != body.cert_der
+    {
+        return Err("pair_mismatch".into());
+    }
+    if body.instance_id.trim().is_empty()
+        || body.name.trim().is_empty()
+        || body.public_key.trim().is_empty()
+        || body.fingerprint.trim().is_empty()
+        || body.cert_der.trim().is_empty()
+    {
+        return Err("pair_mismatch".into());
+    }
+    let derived = crypto::fingerprint_from_hex_pubkey(&body.public_key)
+        .map_err(|_| "pair_mismatch".to_string())?;
+    if derived != body.fingerprint {
+        return Err("pair_mismatch".into());
+    }
+    let cert = base64::engine::general_purpose::STANDARD
+        .decode(&body.cert_der)
+        .map_err(|_| "pair_mismatch".to_string())?;
+    if cert.is_empty() {
+        return Err("pair_mismatch".into());
+    }
+    Ok(())
+}
+
 async fn pair_revoke(
     State(state): State<AppState>,
-    Json(body): Json<PairRevoke>,
-) -> StatusCode {
-    let _ = state.with_store(|s| s.remove_device(&body.instance_id));
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let auth = auth_paired(&state, &headers, &body)?;
+    let parsed: PairRevoke = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    // A device may only revoke itself: the signed caller id must match the
+    // instance id in the body, so no paired peer can delete another device.
+    if parsed.instance_id != auth.instance_id {
+        return Err((StatusCode::FORBIDDEN, "rejected".into()));
+    }
+    let _ = state.with_store(|s| s.remove_device(&auth.instance_id));
     state.emit_devices();
-    StatusCode::NO_CONTENT
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn sync_entry(
@@ -393,10 +454,15 @@ async fn get_file_inner(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
         .ok_or((StatusCode::NOT_FOUND, "source_file_gone".into()))?;
 
-    if let (Some(expected), Some(got)) = (item.download_token, token) {
-        if expected != got {
-            return Err((StatusCode::UNAUTHORIZED, "device_removed".into()));
-        }
+    // Every downloadable item carries a token, and the caller must present it.
+    // (Legacy rows without one are refused rather than left open to any paired
+    // device.) A peer fetching a file it was offered sends the token from the
+    // sync metadata, so the legitimate download path is unaffected.
+    let Some(expected) = item.download_token.as_deref() else {
+        return Err((StatusCode::UNAUTHORIZED, "device_removed".into()));
+    };
+    if token.as_deref() != Some(expected) {
+        return Err((StatusCode::UNAUTHORIZED, "device_removed".into()));
     }
 
     let Some(hash) = item.blob_hash else {
@@ -412,6 +478,12 @@ async fn get_file_inner(
     if let Ok(mut g) = state.inner.inflight_blobs.lock() {
         g.insert(hash.clone());
     }
+    // Held by the response stream, so the hash is in-flight for exactly as long
+    // as bytes can still be read (stream end, client disconnect, or panic).
+    let guard = InflightGuard {
+        state: state.clone(),
+        hash: hash.clone(),
+    };
 
     let file_len = item
         .file_size
@@ -420,7 +492,19 @@ async fn get_file_inner(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "source_file_gone".into()))?;
 
-    let range = parse_range(headers.get(header::RANGE).and_then(|v| v.to_str().ok()), file_len);
+    let etag = format!("\"{hash}\"");
+    // If-Range: a resuming client sends the ETag of the bytes it already holds.
+    // A mismatch means the blob changed, so ignore Range and send the whole file.
+    let if_range_ok = headers
+        .get(header::IF_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim() == etag)
+        .unwrap_or(true);
+    let range = if if_range_ok {
+        parse_range(headers.get(header::RANGE).and_then(|v| v.to_str().ok()), file_len)
+    } else {
+        None
+    };
     let (start, end, status) = match range {
         Some((s, e)) => (s, e, StatusCode::PARTIAL_CONTENT),
         None => (0, file_len.saturating_sub(1), StatusCode::OK),
@@ -432,16 +516,14 @@ async fn get_file_inner(
     }
     let take = end.saturating_sub(start).saturating_add(1);
     let reader = file.take(take);
-    let stream = ReaderStream::new(reader);
-    let hash_for_drop = hash.clone();
-    let state2 = state.clone();
-    let stream = stream.map(move |chunk| {
-        let _ = &hash_for_drop;
+    let stream = ReaderStream::new(reader).map(move |chunk| {
+        let _in_flight = &guard;
         chunk
     });
 
     let mut builder = Response::builder().status(status);
     builder = builder.header(header::ACCEPT_RANGES, "bytes");
+    builder = builder.header(header::ETAG, etag);
     builder = builder.header(header::CONTENT_LENGTH, take.to_string());
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(
@@ -452,14 +534,6 @@ async fn get_file_inner(
     let resp = builder
         .body(Body::from_stream(stream))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Drop inflight after a delay; stream drop is racy without pin. Track until task ends.
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        if let Ok(mut g) = state2.inner.inflight_blobs.lock() {
-            g.remove(&hash);
-        }
-    });
     Ok(resp)
 }
 
@@ -519,3 +593,108 @@ pub async fn serve(state: AppState, identity: Identity) -> Result<u16, String> {
 }
 
 use futures_util::StreamExt as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_range_forms() {
+        assert_eq!(parse_range(Some("bytes=0-"), 100), Some((0, 99)));
+        assert_eq!(parse_range(Some("bytes=50-99"), 100), Some((50, 99)));
+        assert_eq!(parse_range(Some("bytes=50-"), 100), Some((50, 99)));
+        assert_eq!(parse_range(Some("bytes=-20"), 100), Some((80, 99)));
+        // Open-ended start at EOF is not satisfiable.
+        assert_eq!(parse_range(Some("bytes=100-"), 100), None);
+        // End past the file is not clamped, matching the existing contract.
+        assert_eq!(parse_range(Some("bytes=50-200"), 100), None);
+        assert_eq!(parse_range(Some("items=0-10"), 100), None);
+        assert_eq!(parse_range(None, 100), None);
+    }
+
+    fn pending_for(fp: &str, pk: &str, cert: &str, name: &str, instance: &str) -> IncomingPair {
+        IncomingPair {
+            peer_instance_id: instance.into(),
+            peer_name: name.into(),
+            peer_fingerprint: fp.into(),
+            peer_public_key: pk.into(),
+            peer_cert_der: cert.into(),
+            token: "123456".into(),
+            expires_at: i64::MAX,
+            used: false,
+        }
+    }
+
+    fn key_material() -> (String, String, String) {
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let pk = hex::encode(sk.verifying_key().as_bytes());
+        let fp = crypto::fingerprint_from_hex_pubkey(&pk).unwrap();
+        let cert = base64::engine::general_purpose::STANDARD.encode(b"cert-bytes");
+        (pk, fp, cert)
+    }
+
+    #[test]
+    fn pair_confirm_accepts_matching_identity() {
+        let (pk, fp, cert) = key_material();
+        let pending = pending_for(&fp, &pk, &cert, "Peer", "dev-1");
+        let body = PairConfirm {
+            instance_id: "dev-1".into(),
+            name: "Peer".into(),
+            token: "123456".into(),
+            fingerprint: fp,
+            public_key: pk,
+            cert_der: cert,
+        };
+        assert!(validate_pair_confirm(&pending, &body).is_ok());
+    }
+
+    #[test]
+    fn pair_confirm_rejects_changed_identity() {
+        let (pk, fp, cert) = key_material();
+        let pending = pending_for(&fp, &pk, &cert, "Peer", "dev-1");
+        let mut body = PairConfirm {
+            instance_id: "dev-1".into(),
+            name: "Peer".into(),
+            token: "123456".into(),
+            fingerprint: fp.clone(),
+            public_key: pk.clone(),
+            cert_der: cert.clone(),
+        };
+        body.public_key = hex::encode([9u8; 32]);
+        body.fingerprint = crypto::fingerprint_from_hex_pubkey(&body.public_key).unwrap();
+        assert_eq!(validate_pair_confirm(&pending, &body).unwrap_err(), "pair_mismatch");
+    }
+
+    #[test]
+    fn pair_confirm_rejects_malformed_fields() {
+        let (pk, fp, cert) = key_material();
+        let pending = pending_for(&fp, &pk, &cert, "Peer", "dev-1");
+
+        let mut empty = PairConfirm {
+            instance_id: "dev-1".into(),
+            name: "".into(),
+            token: "123456".into(),
+            fingerprint: fp.clone(),
+            public_key: pk.clone(),
+            cert_der: cert.clone(),
+        };
+        assert_eq!(validate_pair_confirm(&pending, &empty).unwrap_err(), "pair_mismatch");
+
+        empty.name = "Peer".into();
+        empty.public_key = "not-hex".into();
+        assert!(validate_pair_confirm(&pending, &empty).is_err());
+
+        let bad_cert = PairConfirm {
+            instance_id: "dev-1".into(),
+            name: "Peer".into(),
+            token: "123456".into(),
+            fingerprint: fp,
+            public_key: pk,
+            cert_der: "!!!not-base64!!!".into(),
+        };
+        assert_eq!(
+            validate_pair_confirm(&pending, &bad_cert).unwrap_err(),
+            "pair_mismatch"
+        );
+    }
+}

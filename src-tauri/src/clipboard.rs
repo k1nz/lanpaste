@@ -1016,6 +1016,9 @@ pub fn ingest_captured(
                     let (hash, size) = store.put_blob(bytes)?;
                     stored.blob_hash = Some(hash.clone());
                     stored.file_size = Some(size);
+                    // Every downloadable item carries a token so GET /files can
+                    // bind the request to the item, not just to any paired peer.
+                    stored.download_token = Some(hex::encode(rand_bytes(16)));
                     if let Some((w, h)) = image_dimensions_any(bytes) {
                         stored.width = Some(w);
                         stored.height = Some(h);
