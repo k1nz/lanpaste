@@ -15,3 +15,7 @@ export const FALLBACK_ASSETS = {
 } as const;
 
 export type PlatformId = keyof typeof FALLBACK_ASSETS;
+
+/** Matches `src-tauri/tauri.conf.json` overlay window. */
+export const OVERLAY_WIDTH = 780;
+export const OVERLAY_HEIGHT = 520;
