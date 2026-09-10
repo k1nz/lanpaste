@@ -2,8 +2,23 @@
 
 **日期:** 2026-09-07  
 **状态:** 已通过产品讨论，待实现计划  
-**栈:** Tauri 2 + Vue 3 + Rust（v1 只发 macOS）  
+**栈:** Tauri 2 + Vue 3 + Rust（v1 已发布 macOS arm64/x86_64 与 Windows；Linux 仍未构建）  
 **UI 约束:** [design-system/lanpaste/MASTER.md](../../../design-system/lanpaste/MASTER.md)（ui-ux-pro-max，按 Raycast 覆写）
+
+---
+
+## 与 2026-09-07 之后的差异（补充）
+
+本节记录实现期新增、本 spec 当时未预料到的能力，避免后来者误当成「漏做的工作」。以下均已在代码中落地：
+
+- **双语 i18n**：zh-CN + en-US，`AppSettings.locale` 默认 `"system"` 跟随系统语言；切换语言发 `locale-changed` 事件，payload 为解析出的语言码（`src/shared/events.ts`、`src-tauri/src/i18n.rs`、`src-tauri/src/ipc.rs`、`src/locales/*.json`）。
+- **i18n 一致性校验**：`scripts/i18n-parity.mjs` 校验前端两个 locale 文件键集合一致，Rust 侧 `i18n.rs` 的 `catalogs_share_keys` 测试做同样的把关。
+- **Windows 落地**：窗口使用 Acrylic / blur 效果（`src-tauri/tauri.conf.json` 的 `windowEffects`），并实现了 Windows 下真实的 Ctrl+V 粘贴路径（`src-tauri/src/clipboard.rs` 的 Win32 分支）。
+- **历史行图片缩略图**：列表行直接渲染 `preview.imageThumb`（`src/overlay/components/HistoryRow.vue`、`src/shared/types.ts`）。
+- **远程文件延迟取字节**：对端文件写入系统剪贴板时用「promise / 延迟渲染」（macOS `NSPasteboardItemDataProvider`、Windows `CF_HDROP`），只有真正粘贴时才下载字节（`src-tauri/src/clipboard.rs` 的 `write_file_promise`）。
+- **浮层失焦自动关闭**：overlay 失去焦点后短暂延迟即隐藏，实现点击别处消失（`src-tauri/src/ipc.rs` 的 `on_overlay_focus_lost`）。
+- **营销站点**：`site/`（Vue 3 + Tailwind）单独构建，由 `.github/workflows/site.yml` 发布到 GitHub Pages；与第 2 节「非目标」里不做营销落地页式**应用内 UI** 不冲突。
+- **标签触发的发布流水线**：`.github/workflows/release.yml` 在 `v*` tag 上构建 macOS arm64/x86_64 与 Windows 产物，并用 git-cliff（`cliff.toml`）生成 changelog / release notes。
 
 ---
 
@@ -15,7 +30,7 @@ LanPaste 是局域网、无服务器的跨设备剪贴板。本机始终有一�
 
 ### 目标（v1）
 
-- macOS 托盘常驻；`⌘⇧V` 浮层快搜快贴（贴完即关）；设置单独窗口
+- macOS / Windows 托盘常驻；浮层快搜快贴（贴完即关，默认 macOS `⌥⇧V`、Windows `Ctrl+Shift+V`，可在设置改）；设置单独窗口
 - 发现局域网内其他 LanPaste、token 配对、管理设备（备注、移除、发送/接收、自动写入剪贴板）
 - 类型：文本、颜色、URL、HTML、RTF、图片、文件；**同一时间线混排**，按复制时间倒序
 - 混合同步 + 体积封顶（默认 20MB）+ 图片立即传 + 文件粘贴才传
@@ -24,14 +39,14 @@ LanPaste 是局域网、无服务器的跨设备剪贴板。本机始终有一�
 
 ### 非目标（v1 明确不做）
 
-- Windows / Linux 发行（目录按以后能加来切）
+- Linux 发行（目录按以后能加来切）
 - 类型文件夹导航（CrossPaste 交互）
 - OCR、MCP、CLI、浏览器扩展、插件、异地/中继
 - 浮层 Light Mode、营销落地页式 UI
 
 ## 3. 用户与成功标准
 
-个人/小团队在同一 Wi‑Fi 或有线局域网，2–N 台 Mac。成功看起来像：
+个人/小团队在同一 Wi‑Fi 或有线局域网，2–N 台 Mac / Windows。成功看起来像：
 
 1. 两台机器打开 LanPaste，附近列表能看见对方
 2. 点添加，对着目标机弹出的 6 位 token 输入，进入「我的设备」
@@ -59,7 +74,7 @@ Rust core
 
 | 单元 | 做什么 | 依赖 |
 |------|--------|------|
-| `clipboard` | 监听系统剪贴板、写入、向前台应用粘贴 | macOS 原生 API（trait，供以后 Win 实现） |
+| `clipboard` | 监听系统剪贴板、写入、向前台应用粘贴 | macOS 原生 API + Windows Win32（同一 trait 的多平台实现） |
 | `store` | SQLite 元数据 + blob 目录 + 内容哈希去重 | 磁盘 |
 | `crypto` | 本机 Ed25519 身份、证书、加密会话校验 | 密钥文件 |
 | `device` | 附近列表、已配对、备注、发送/接收/写剪贴板开关 | store + mdns |
@@ -140,9 +155,9 @@ Rust core
 | 浮层 | 搜索、类型过滤、时间线、预览、Information、粘贴、同步到 |
 | 设置 | 通用、设备、存储与清理、快捷键、关于 |
 | 配对弹窗 | 目标机 token，不依赖设置是否打开 |
-| 托盘 | 常驻；单击打开浮层；菜单含设置 / 退出 |
+| 托盘 | 常驻；单击切换浮层（`ipc::toggle_overlay`）；菜单含打开历史 / 设置 / 退出 |
 
-键盘：`⌘⇧V` 开浮层（可改）、↑↓ 移动、Enter 粘贴并关、Esc 关、⌘K Actions、⌘, 设置。
+键盘：默认 macOS `⌥⇧V`、Windows `Ctrl+Shift+V` 开浮层（可改）、↑↓ 移动、Enter 粘贴并关、Esc 关、Actions、设置。Actions 与设置的唤起键在 macOS 为 `⌘K` / `⌘,`，Windows 对应 `Ctrl+K` / `Ctrl+,`（前端以 `metaKey || ctrlKey` 统一处理）。
 
 Actions：粘贴、复制到本机剪贴板、同步到、在访达中显示（文件）、删除、复制颜色值/URL。
 
@@ -178,7 +193,7 @@ Rust 依赖方向：Tauri 2、global-shortcut、Axum、rustls、mdns-sd、rusqli
 
 前端：`@phosphor-icons/vue`；历史列表 `v-for` 用稳定 id；>200 条虚拟列表；Vue 不 `fetch` 设备 IP。
 
-文案 v1 以简体中文为主，键值放 i18n，避免写死散落。
+文案 v1 为双语 zh-CN + en-US，默认跟随系统语言（`AppSettings.locale` 初值 `"system"`）；语言切换后 Rust 侧发 `locale-changed` 事件（payload 为解析出的语言码），Rust 内置 key 与前端 i18n key 由 `src-tauri/src/i18n.rs` 的键一致性测试把关。文案键值统一放 i18n，避免写死散落。
 
 ## 11. 测试
 
