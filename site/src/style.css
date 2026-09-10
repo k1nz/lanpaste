@@ -1,0 +1,81 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --color-accent: #0a84ff;
+  --color-on-accent: #ffffff;
+  --radius-window: 12px;
+  --radius-control: 6px;
+}
+
+:root {
+  --canvas: #f4f4f5;
+  --canvas-2: #e4e4e7;
+  --ink: #18181b;
+  --muted: #52525b;
+  --line: rgb(24 24 27 / 0.1);
+  --nav: rgb(244 244 245 / 0.78);
+  --elevated: rgb(24 24 27 / 0.04);
+  --z-nav: 40;
+  --z-menu: 50;
+  --z-grain: 60;
+}
+
+.dark {
+  --canvas: #0a0a0c;
+  --canvas-2: #141416;
+  --ink: #ededef;
+  --muted: #8a8f98;
+  --line: rgb(255 255 255 / 0.08);
+  --nav: rgb(10 10 12 / 0.72);
+  --elevated: rgb(255 255 255 / 0.06);
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+#features,
+#download {
+  scroll-margin-top: 5.5rem;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-nav {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--canvas);
+  }
+}

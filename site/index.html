@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="A clipboard for the computers on your desk. Sync Mac and Windows over your own network. No account, no cloud."
+    />
+    <title>LanPaste</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("lanpaste-theme");
+          if (theme !== "light") document.documentElement.classList.add("dark");
+          var lang = localStorage.getItem("lanpaste-lang");
+          if (!lang) {
+            lang = navigator.language.toLowerCase().indexOf("zh") === 0 ? "zh-CN" : "en-US";
+          }
+          document.documentElement.lang = lang === "zh-CN" ? "zh-CN" : "en";
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
