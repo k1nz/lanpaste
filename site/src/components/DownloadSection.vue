@@ -8,18 +8,25 @@ import MagneticButton from "./MagneticButton.vue";
 import Reveal from "./Reveal.vue";
 
 const { t } = useI18n();
-const { assets, platform, primaryUrl, loading, error } = useRelease();
+const { assets, platform, primaryUrl, loading, error, macArchUnknown } =
+  useRelease();
+
+const PLATFORM_ORDER: PlatformId[] = ["mac-arm", "mac-intel", "windows"];
 
 const primaryLabel = computed(() => {
   if (platform.value === "windows") return t("download.windows");
   if (platform.value === "mac-intel") return t("download.macIntel");
-  return t("download.macArm");
+  if (platform.value === "mac-arm") return t("download.macArm");
+  return t("download.otherPlatforms");
 });
 
-const others = computed(() => {
-  const order: PlatformId[] = ["mac-arm", "mac-intel", "windows"];
-  return order.filter((id) => id !== platform.value);
-});
+// With no detected platform we list every build, which offers both Mac builds
+// to an unresolved Mac and every option to Linux/other visitors.
+const others = computed(() =>
+  platform.value
+    ? PLATFORM_ORDER.filter((id) => id !== platform.value)
+    : PLATFORM_ORDER,
+);
 
 function labelFor(id: PlatformId) {
   if (id === "windows") return t("download.windows");
@@ -44,7 +51,20 @@ function labelFor(id: PlatformId) {
 
       <Reveal :delay="0.08">
         <div>
-          <div class="flex flex-wrap items-center gap-3">
+          <div
+            v-if="loading"
+            class="flex flex-wrap items-center gap-3"
+            aria-busy="true"
+          >
+            <span
+              class="h-11 w-32 animate-pulse rounded-[var(--radius-control)] bg-[var(--elevated)]"
+            />
+            <span class="text-sm text-[var(--muted)]">
+              {{ t("download.loading") }}
+            </span>
+          </div>
+
+          <div v-else-if="platform" class="flex flex-wrap items-center gap-3">
             <MagneticButton :href="primaryUrl" :label="t('hero.download')">
               <span class="inline-flex items-center gap-2">
                 <PhWindowsLogo v-if="platform === 'windows'" :size="18" weight="fill" />
@@ -55,15 +75,20 @@ function labelFor(id: PlatformId) {
             <span class="text-sm text-[var(--muted)]">{{ primaryLabel }}</span>
           </div>
 
-          <p v-if="loading" class="mt-4 text-sm text-[var(--muted)]">
-            {{ t("download.loading") }}
-          </p>
-          <p v-else-if="error" class="mt-4 text-sm text-[var(--muted)]">
+          <p v-if="error && !loading" class="mt-4 text-sm text-[var(--muted)]">
             {{ t("download.error") }}
           </p>
 
-          <div class="mt-8">
-            <p class="text-sm text-[var(--muted)]">{{ t("download.otherPlatforms") }}</p>
+          <div v-if="!loading" class="mt-8">
+            <p class="text-sm text-[var(--muted)]">
+              {{ platform ? t("download.otherPlatforms") : t("download.chooseBuild") }}
+            </p>
+            <p
+              v-if="macArchUnknown"
+              class="mt-1 text-sm text-[var(--muted)]"
+            >
+              {{ t("download.macArchUnknown") }}
+            </p>
             <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">
               <a
                 v-for="id in others"

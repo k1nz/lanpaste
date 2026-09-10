@@ -113,6 +113,8 @@
   "download.loading": "正在获取最新构建…",
   "download.error": "无法连接到 GitHub。请打开「全部版本」自行选择文件。",
   "download.otherPlatforms": "其他构建",
+  "download.chooseBuild": "选择适合你的版本",
+  "download.macArchUnknown": "没能识别你的 Mac 芯片，下面两种 Mac 版本都在，请按需选择。",
   "download.firstLaunch": "首次启动",
 
   "footer.tagline": "这边复制。那边粘贴。",

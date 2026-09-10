@@ -113,6 +113,8 @@
   "download.loading": "Fetching the latest build…",
   "download.error": "Could not reach GitHub. Use All releases to pick a file.",
   "download.otherPlatforms": "Other builds",
+  "download.chooseBuild": "Choose your build",
+  "download.macArchUnknown": "We couldn't tell which chip your Mac uses. Both Mac builds are listed below.",
   "download.firstLaunch": "First launch",
 
   "footer.tagline": "Copy on this computer. Paste on the other one.",
