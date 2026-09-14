@@ -810,6 +810,124 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
     sniff_image_mime_opt(bytes).unwrap_or("image/png")
 }
 
+fn encode_png(img: &DynamicImage) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
+        .ok()?;
+    Some(buf)
+}
+
+/// Windows 32-bit CF_DIB often stores unused alpha as 0, which would make a
+/// PNG fully transparent. Treat an all-zero alpha channel as opaque.
+fn flatten_blank_alpha(img: DynamicImage) -> DynamicImage {
+    if !img.color().has_alpha() {
+        return img;
+    }
+    let rgba = img.to_rgba8();
+    if rgba.pixels().all(|p| p[3] == 0) {
+        DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).to_rgb8())
+    } else {
+        DynamicImage::ImageRgba8(rgba)
+    }
+}
+
+fn raster_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let img = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    encode_png(&flatten_blank_alpha(img))
+}
+
+fn clipboard_image_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() >= 8 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(bytes.to_vec());
+    }
+    if looks_like_image_magic(bytes) {
+        return raster_to_png(bytes);
+    }
+    png_from_dib(bytes)
+}
+
+const BI_BITFIELDS: u32 = 3;
+const BI_ALPHABITFIELDS: u32 = 6;
+
+fn dib_pixel_offset(dib: &[u8]) -> Option<u32> {
+    if dib.len() < 12 {
+        return None;
+    }
+    let header_size = u32::from_le_bytes(dib[0..4].try_into().ok()?);
+    if header_size < 12 || header_size as usize > dib.len() {
+        return None;
+    }
+    let extra = if header_size >= 40 {
+        let bit_count = u16::from_le_bytes(dib[14..16].try_into().ok()?);
+        let compression = u32::from_le_bytes(dib[16..20].try_into().ok()?);
+        let clr_used = u32::from_le_bytes(dib[32..36].try_into().ok()?);
+        if header_size == 40 && (compression == BI_BITFIELDS || compression == BI_ALPHABITFIELDS) {
+            if compression == BI_ALPHABITFIELDS {
+                16
+            } else {
+                12
+            }
+        } else if bit_count <= 8 {
+            let n = if clr_used > 0 {
+                clr_used
+            } else {
+                1u32 << bit_count.min(8)
+            };
+            n.saturating_mul(4)
+        } else {
+            0
+        }
+    } else {
+        let bit_count = u16::from_le_bytes(dib[10..12].try_into().ok()?);
+        if bit_count <= 8 {
+            (1u32 << bit_count.min(8)).saturating_mul(3)
+        } else {
+            0
+        }
+    };
+    Some(14u32.saturating_add(header_size).saturating_add(extra))
+}
+
+fn dib_as_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+    let off_bits = dib_pixel_offset(dib)?;
+    if off_bits as usize > 14 + dib.len() {
+        return None;
+    }
+    let file_size = 14u32.saturating_add(dib.len() as u32);
+    let mut bmp = Vec::with_capacity(14 + dib.len());
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&[0u8; 4]);
+    bmp.extend_from_slice(&off_bits.to_le_bytes());
+    bmp.extend_from_slice(dib);
+    Some(bmp)
+}
+
+/// CF_DIB / CF_DIBV5 payload (BITMAPINFO + bits, no file header) → PNG.
+fn png_from_dib(dib: &[u8]) -> Option<Vec<u8>> {
+    raster_to_png(&dib_as_bmp(dib)?)
+}
+
+fn png_to_dib(png: &[u8]) -> Option<Vec<u8>> {
+    let img = ImageReader::new(Cursor::new(png))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let mut bmp = Vec::new();
+    img.write_to(&mut Cursor::new(&mut bmp), ImageFormat::Bmp)
+        .ok()?;
+    if bmp.len() > 14 && bmp.starts_with(b"BM") {
+        Some(bmp[14..].to_vec())
+    } else {
+        None
+    }
+}
+
 pub fn make_image_thumb_data_url(bytes: &[u8]) -> Option<String> {
     let img = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -1680,7 +1798,7 @@ mod win32 {
     use windows::Win32::System::Memory::{
         GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
     };
-    use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
+    use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_TIFF, CF_UNICODETEXT};
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -2232,6 +2350,9 @@ mod win32 {
                 if fmt != 0 {
                     set_clipboard_bytes(fmt, png)?;
                 }
+                if let Some(dib) = super::png_to_dib(png) {
+                    let _ = set_clipboard_bytes(u32::from(CF_DIB.0), &dib);
+                }
             }
             if let Some(html) = &payload.html {
                 let fmt = RegisterClipboardFormatW(w!("HTML Format"));
@@ -2337,6 +2458,43 @@ mod win32 {
         }
     }
 
+    fn try_format_image(fmt: u32, as_dib: bool) -> Option<Vec<u8>> {
+        unsafe {
+            if fmt == 0 || IsClipboardFormatAvailable(fmt).is_err() {
+                return None;
+            }
+            let handle = GetClipboardData(fmt).ok()?;
+            let bytes = handle_bytes(handle)?;
+            if bytes.is_empty() {
+                return None;
+            }
+            if as_dib {
+                super::png_from_dib(&bytes)
+            } else {
+                super::clipboard_image_to_png(&bytes)
+            }
+        }
+    }
+
+    /// Screenshot tools (Snipaste, Win+PrintScreen) put CF_DIB / CF_BITMAP, not
+    /// Chrome's registered "PNG" format. Windows synthesizes CF_DIB from
+    /// CF_BITMAP, so reading DIB covers both. Qt apps also expose image/png.
+    fn read_image() -> Option<Vec<u8>> {
+        let png = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+        let image_png = unsafe { RegisterClipboardFormatW(w!("image/png")) };
+        let image_bmp = unsafe { RegisterClipboardFormatW(w!("image/bmp")) };
+        let jfif = unsafe { RegisterClipboardFormatW(w!("JFIF")) };
+        let image_jpeg = unsafe { RegisterClipboardFormatW(w!("image/jpeg")) };
+        try_format_image(png, false)
+            .or_else(|| try_format_image(image_png, false))
+            .or_else(|| try_format_image(image_bmp, false))
+            .or_else(|| try_format_image(jfif, false))
+            .or_else(|| try_format_image(image_jpeg, false))
+            .or_else(|| try_format_image(u32::from(CF_DIB.0), true))
+            .or_else(|| try_format_image(u32::from(CF_DIBV5.0), true))
+            .or_else(|| try_format_image(u32::from(CF_TIFF.0), false))
+    }
+
     pub fn read() -> Result<Option<CapturedPasteboard>, String> {
         with_clipboard(|| {
             let mut items: Vec<CapturedItem> = Vec::new();
@@ -2355,19 +2513,12 @@ mod win32 {
                 }
 
                 if !pasteboard_has_file(&items) {
-                    let png_fmt = RegisterClipboardFormatW(w!("PNG"));
-                    if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
-                        if let Ok(handle) = GetClipboardData(png_fmt) {
-                            if let Some(bytes) = handle_bytes(handle) {
-                                if !bytes.is_empty() {
-                                    items.push(CapturedItem {
-                                        ty: PasteType::Image,
-                                        image: Some(bytes),
-                                        ..empty_item()
-                                    });
-                                }
-                            }
-                        }
+                    if let Some(bytes) = read_image() {
+                        items.push(CapturedItem {
+                            ty: PasteType::Image,
+                            image: Some(bytes),
+                            ..empty_item()
+                        });
                     }
                 }
 
@@ -2731,6 +2882,76 @@ mod tests {
         assert!(!looks_like_image_name("archive.tar.gz"));
         assert!(looks_like_image_magic(&png_bytes(8, 8, false)));
         assert!(!looks_like_image_magic(b"hello"));
+    }
+
+    fn bmp_without_header(w: u32, h: u32) -> Vec<u8> {
+        let png = png_bytes(w, h, false);
+        let img = image::load_from_memory(&png).unwrap();
+        let mut bmp = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+            .unwrap();
+        assert!(bmp.starts_with(b"BM"));
+        bmp[14..].to_vec()
+    }
+
+    #[test]
+    fn png_from_windows_dib_keeps_dimensions() {
+        let dib = bmp_without_header(32, 24);
+        let out = png_from_dib(&dib).expect("dib");
+        assert!(out.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(image_dimensions_any(&out), Some((32, 24)));
+    }
+
+    #[test]
+    fn png_from_32bit_dib_with_zero_alpha_is_opaque() {
+        let mut dib = vec![0u8; 40 + 4];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&1i32.to_le_bytes());
+        dib[8..12].copy_from_slice(&1i32.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        dib[40] = 0;
+        dib[41] = 0;
+        dib[42] = 255;
+        dib[43] = 0;
+        let out = png_from_dib(&dib).expect("dib");
+        let img = image::load_from_memory(&out).unwrap().to_rgba8();
+        let p = img.get_pixel(0, 0);
+        assert_eq!(p[0], 255);
+        assert_eq!(p[1], 0);
+        assert_eq!(p[2], 0);
+        assert_eq!(p[3], 255);
+    }
+
+    #[test]
+    fn clipboard_png_passthrough_keeps_bytes() {
+        let png = png_bytes(8, 8, false);
+        let out = clipboard_image_to_png(&png).expect("png");
+        assert_eq!(out, png);
+    }
+
+    #[test]
+    fn snipaste_style_dib_ingests_as_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let png = png_from_dib(&bmp_without_header(16, 10)).unwrap();
+        let captured = CapturedPasteboard {
+            items: vec![cap_image(png)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        assert_eq!(entry.primary_type, crate::types::PasteType::Image);
+        assert_eq!(entry.preview.width, Some(16));
+        assert_eq!(entry.preview.height, Some(10));
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        let blob = payload.image_png.expect("image");
+        assert!(blob.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let dib = png_to_dib(&blob).expect("write dib");
+        assert!(dib.len() >= 40);
+        assert_eq!(u32::from_le_bytes(dib[0..4].try_into().unwrap()), 40);
     }
 
     const CHROMIUM_HTML: &str = r#"<meta charset="UTF-8"><span style="caret-color: rgb(0, 0, 0); color: rgb(0, 0, 0); font-style: normal;">管理修改账户信息</span>"#;
