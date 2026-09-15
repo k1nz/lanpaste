@@ -368,6 +368,8 @@ fn ingest_remote(
                 "image" => {
                     if let Some(b64) = &it.image_b64 {
                         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                            let bytes = crate::clipboard::normalize_image_for_store(&bytes)
+                                .unwrap_or(bytes);
                             let (hash, _) = store.put_blob(&bytes)?;
                             stored.blob_hash = Some(hash.clone());
                             if stored.width.is_none() {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { HistoryEntry, TransferProgressPayload } from "../../shared/types";
 import { formatBytes, hasImagePreview, typeLabel } from "../../shared/format";
 import { displaySource, displayTitle, t } from "../../shared/i18n";
@@ -10,11 +10,32 @@ const props = defineProps<{
   progress: TransferProgressPayload | null;
 }>();
 
+const originalFailed = ref(false);
+
+watch(
+  () => props.entry?.id,
+  () => {
+    originalFailed.value = false;
+  },
+);
+
 const imageSrc = computed(() => {
   const e = props.entry;
   if (!e || !hasImagePreview(e)) return undefined;
-  return mediaSrc(e.preview.path) || mediaSrc(e.preview.imageThumb);
+  const original = mediaSrc(e.preview.path);
+  const thumb = mediaSrc(e.preview.imageThumb);
+  if (!originalFailed.value && original) return original;
+  return thumb || original;
 });
+
+function onImageError() {
+  if (originalFailed.value) return;
+  const e = props.entry;
+  const original = mediaSrc(e?.preview.path);
+  const thumb = mediaSrc(e?.preview.imageThumb);
+  if (thumb && thumb !== original) originalFailed.value = true;
+}
+
 const ratio = computed(() => {
   const p = props.progress;
   const e = props.entry;
@@ -94,7 +115,13 @@ const textPreview = computed(() => {
         <code>{{ entry.preview.color }}</code>
       </div>
       <div v-else-if="imageSrc" class="image-block">
-        <img :src="imageSrc" :alt="displayTitle(entry.title, entry.primaryType)" />
+        <div class="image-frame">
+          <img
+            :src="imageSrc"
+            :alt="displayTitle(entry.title, entry.primaryType)"
+            @error="onImageError"
+          />
+        </div>
         <p v-if="entry.primaryType === 'file'" class="file-name">
           {{ entry.preview.fileName || displayTitle(entry.title, entry.primaryType) }}
         </p>
@@ -174,6 +201,8 @@ const textPreview = computed(() => {
 .preview-body {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .muted {
@@ -202,14 +231,25 @@ const textPreview = computed(() => {
 }
 
 .image-block {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
 }
 
-.image-block img {
+.image-frame {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-frame img {
   max-width: 100%;
-  max-height: 220px;
+  max-height: 100%;
   object-fit: contain;
   border-radius: 6px;
 }

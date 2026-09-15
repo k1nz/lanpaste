@@ -850,6 +850,16 @@ fn clipboard_image_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
     png_from_dib(bytes)
 }
 
+/// Keep web-displayable rasters as-is. Convert TIFF/BMP (common on macOS
+/// NSPasteboard / Windows CF_TIFF) to PNG so the overlay `<img>` and the
+/// `NSPasteboardTypePNG` write path both see a real PNG blob.
+pub fn normalize_image_for_store(bytes: &[u8]) -> Option<Vec<u8>> {
+    match sniff_image_mime_opt(bytes) {
+        Some("image/png") | Some("image/jpeg") | Some("image/gif") | Some("image/webp") => None,
+        _ => clipboard_image_to_png(bytes),
+    }
+}
+
 const BI_BITFIELDS: u32 = 3;
 const BI_ALPHABITFIELDS: u32 = 6;
 
@@ -1130,7 +1140,9 @@ pub fn ingest_captured(
                 }
             }
             PasteType::Image => {
-                if let Some(bytes) = &cap.image {
+                if let Some(raw) = &cap.image {
+                    let converted = normalize_image_for_store(raw);
+                    let bytes = converted.as_deref().unwrap_or(raw.as_slice());
                     let (hash, size) = store.put_blob(bytes)?;
                     stored.blob_hash = Some(hash.clone());
                     stored.file_size = Some(size);
@@ -1575,9 +1587,10 @@ mod macos {
             if let Some(data) = png.or(tiff) {
                 let bytes = nsdata_bytes(&data);
                 if !bytes.is_empty() {
+                    let image = clipboard_image_to_png(&bytes).unwrap_or(bytes);
                     items.push(CapturedItem {
                         ty: PasteType::Image,
-                        image: Some(bytes),
+                        image: Some(image),
                         ..empty_item()
                     });
                 }
@@ -2803,6 +2816,47 @@ mod tests {
         assert_eq!(entry.preview.width, Some(16));
         assert_eq!(entry.preview.height, Some(16));
         assert!(entry.preview.path.is_some());
+    }
+
+    fn tiff_bytes(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([20, 80, 160]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut buf), ImageFormat::Tiff)
+            .expect("tiff");
+        buf
+    }
+
+    #[test]
+    fn tiff_clipboard_image_is_stored_as_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(dir.path()).unwrap();
+        let tiff = tiff_bytes(12, 8);
+        assert!(
+            (tiff[0] == 0x49 && tiff[1] == 0x49) || (tiff[0] == 0x4D && tiff[1] == 0x4D),
+            "fixture is not TIFF"
+        );
+        assert!(normalize_image_for_store(&tiff).is_some());
+        let captured = CapturedPasteboard {
+            items: vec![cap_image(tiff)],
+        };
+        let result = ingest_captured(&mut store, &captured, "本机", "dev", "zh-CN")
+            .unwrap()
+            .unwrap();
+        let entry = store.get_entry(&result.id).unwrap().unwrap();
+        let path = entry.preview.path.expect("path");
+        assert!(path.ends_with("image.png"), "{path}");
+        assert_eq!(entry.preview.width, Some(12));
+        assert_eq!(entry.preview.height, Some(8));
+        let payload = payload_from_store(&store, &result.id).unwrap();
+        let blob = payload.image_png.expect("image");
+        assert!(blob.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn normalize_keeps_png_jpeg_gif_webp() {
+        let png = png_bytes(8, 8, false);
+        assert!(normalize_image_for_store(&png).is_none());
     }
 
     #[test]
