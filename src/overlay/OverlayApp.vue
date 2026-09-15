@@ -577,7 +577,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  grid-template-columns: 40% 1fr;
 }
 
 .split > * {

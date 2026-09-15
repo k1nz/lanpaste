@@ -303,7 +303,7 @@ function iconFor(type: ItemType) {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  grid-template-columns: 40% 1fr;
 }
 
 .list {
