@@ -518,7 +518,7 @@ async fn get_file_inner(
     }
     let take = end.saturating_sub(start).saturating_add(1);
     let reader = file.take(take);
-    let stream = ReaderStream::new(reader).map(move |chunk| {
+    let stream = ReaderStream::with_capacity(reader, super::FILE_STREAM_CHUNK).map(move |chunk| {
         let _in_flight = &guard;
         chunk
     });

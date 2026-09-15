@@ -9,6 +9,11 @@ use crate::state::AppState;
 
 pub use sync::{auto_sync_new_entry, download_file, flush_pending, sync_entry_to_device};
 
+/// Read/write size for LAN file streams. `ReaderStream::new` defaults to 4 KiB,
+/// which turns a 200 MB transfer into tens of thousands of TLS records and UI
+/// progress events.
+pub const FILE_STREAM_CHUNK: usize = 256 * 1024;
+
 pub async fn start_network(state: AppState) -> Result<u16, String> {
     let identity = state.inner.identity.clone();
     let port = server::serve(state.clone(), identity).await?;

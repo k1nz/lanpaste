@@ -413,15 +413,6 @@ onMounted(async () => {
     }),
     await onTransferProgress((p) => {
       progress.value = p;
-      items.value = items.value.map((it) =>
-        it.id === p.id
-          ? {
-              ...it,
-              fileDownloadState: p.received >= p.total ? "idle" : "downloading",
-              needsFileDownload: p.received < p.total,
-            }
-          : it,
-      );
     }),
   );
   await refreshChrome();

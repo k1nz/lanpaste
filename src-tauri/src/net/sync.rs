@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use futures_util::StreamExt;
@@ -10,8 +11,14 @@ use crate::state::AppState;
 use crate::store::{PendingSync, StoredDevice, StoredItem, StoredPasteboard};
 use crate::types::{should_auto_sync, TransferProgressPayload, DEFAULT_AUTO_SYNC_MAX_BYTES};
 
-use super::client::{host_url, http_client, pin_from_device, signed_headers};
+use super::client::{host_url, http_client, http_client_for_download, pin_from_device, signed_headers};
 use super::protocol::{file_item_has_no_bytes, SyncEntryBody, SyncItem};
+
+/// Abort a download if the peer stops sending bytes for this long.
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Cap UI/IPC progress events so a 200 MB file does not emit tens of thousands
+/// of `transfer-progress` payloads.
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 /// How many times a retryable queued send is attempted before the row is
 /// dropped. At the 3s flusher cadence this bounds a stuck entry's lifetime.
@@ -43,6 +50,23 @@ pub enum ResumeAction {
     Resume(u64),
     /// The partial already holds the whole file; finalize without the network.
     AlreadyComplete(u64),
+}
+
+/// Emit on the first update, then at most once per `PROGRESS_EMIT_INTERVAL`,
+/// and always when the last byte lands so the bar can reach 100%.
+pub fn should_emit_progress(
+    last_emit: Option<Instant>,
+    now: Instant,
+    received: u64,
+    total: u64,
+) -> bool {
+    if total > 0 && received >= total {
+        return true;
+    }
+    match last_emit {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= PROGRESS_EMIT_INTERVAL,
+    }
 }
 
 /// Decide how to resume from a partial of `partial_len` bytes when the total
@@ -473,7 +497,7 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
     };
 
     let pin = pin_from_device(&device)?;
-    let client = http_client(Some(pin))?;
+    let client = http_client_for_download(Some(pin))?;
     let url = format!(
         "{}?token={}",
         host_url(&host, port, &format!("/files/{file_id}")),
@@ -494,10 +518,17 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
     let _ = state.with_store(|s| s.update_download_state(pasteboard_id, "downloading", true));
     state.emit_history();
 
-    let resp = req.send().await.map_err(|e| {
-        fail_download(state, pasteboard_id);
-        map_net_err(e)
-    })?;
+    let resp = match tokio::time::timeout(DOWNLOAD_STALL_TIMEOUT, req.send()).await {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => {
+            fail_download(state, pasteboard_id);
+            return Err(map_net_err(e));
+        }
+        Err(_) => {
+            fail_download(state, pasteboard_id);
+            return Err("offline".into());
+        }
+    };
     let status = resp.status();
     if !status.is_success() {
         let code = status.as_u16();
@@ -554,7 +585,7 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
         }
     }
 
-    let mut out = if received == 0 {
+    let dest = if received == 0 {
         tokio::fs::File::create(&partial).await
     } else {
         tokio::fs::OpenOptions::new().append(true).open(&partial).await
@@ -563,10 +594,20 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
         fail_download(state, pasteboard_id);
         format!("partial file: {e}")
     })?;
+    let mut out = tokio::io::BufWriter::with_capacity(super::FILE_STREAM_CHUNK, dest);
 
     let handle = state.handle().ok();
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    let mut last_emit: Option<Instant> = None;
+    loop {
+        let chunk = match tokio::time::timeout(DOWNLOAD_STALL_TIMEOUT, stream.next()).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => {
+                fail_download(state, pasteboard_id);
+                return Err("offline".into());
+            }
+        };
         let chunk = chunk.map_err(|e| {
             // Keep whatever landed on disk; the next attempt resumes from there.
             fail_download(state, pasteboard_id);
@@ -577,15 +618,19 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
             return Err(format!("partial write: {e}"));
         }
         received += chunk.len() as u64;
-        if let Some(h) = &handle {
-            let _ = h.emit(
-                "transfer-progress",
-                TransferProgressPayload {
-                    id: pasteboard_id.to_string(),
-                    received,
-                    total,
-                },
-            );
+        let now = Instant::now();
+        if should_emit_progress(last_emit, now, received, total) {
+            last_emit = Some(now);
+            if let Some(h) = &handle {
+                let _ = h.emit(
+                    "transfer-progress",
+                    TransferProgressPayload {
+                        id: pasteboard_id.to_string(),
+                        received,
+                        total,
+                    },
+                );
+            }
         }
     }
     let _ = out.flush().await;
@@ -830,6 +875,30 @@ mod tests {
         assert_eq!(parse_content_range_total(Some("bytes 0-0/*")), None);
         assert_eq!(parse_content_range_total(Some("nonsense")), None);
         assert_eq!(parse_content_range_total(None), None);
+    }
+
+    #[test]
+    fn progress_emits_first_throttled_and_final() {
+        let t0 = Instant::now();
+        assert!(should_emit_progress(None, t0, 1, 100));
+        assert!(!should_emit_progress(
+            Some(t0),
+            t0 + Duration::from_millis(50),
+            50,
+            100
+        ));
+        assert!(should_emit_progress(
+            Some(t0),
+            t0 + Duration::from_millis(100),
+            50,
+            100
+        ));
+        assert!(should_emit_progress(
+            Some(t0),
+            t0 + Duration::from_millis(1),
+            100,
+            100
+        ));
     }
 
     #[test]

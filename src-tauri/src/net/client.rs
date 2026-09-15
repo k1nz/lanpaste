@@ -75,13 +75,30 @@ fn client_config(pin: Option<Vec<u8>>) -> Result<ClientConfig, String> {
     Ok(cfg)
 }
 
-pub fn http_client(pin: Option<Vec<u8>>) -> Result<reqwest::Client, String> {
+fn build_http_client(
+    pin: Option<Vec<u8>>,
+    request_timeout: Option<Duration>,
+) -> Result<reqwest::Client, String> {
     let cfg = client_config(pin)?;
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .use_preconfigured_tls(cfg)
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("http client: {e}"))
+        .connect_timeout(Duration::from_secs(10))
+        .tcp_nodelay(true);
+    if let Some(timeout) = request_timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().map_err(|e| format!("http client: {e}"))
+}
+
+pub fn http_client(pin: Option<Vec<u8>>) -> Result<reqwest::Client, String> {
+    build_http_client(pin, Some(Duration::from_secs(30)))
+}
+
+/// File downloads must not share the 30s JSON timeout: a 200 MB LAN copy can
+/// take minutes on Wi-Fi. Connect still fails fast; stall detection lives in
+/// the download loop.
+pub fn http_client_for_download(pin: Option<Vec<u8>>) -> Result<reqwest::Client, String> {
+    build_http_client(pin, None)
 }
 
 pub fn pin_from_device(d: &StoredDevice) -> Result<Vec<u8>, String> {
