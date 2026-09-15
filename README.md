@@ -6,6 +6,8 @@ Copy on this computer. Paste on the other one.
 
 LanPaste is a clipboard for the computers on your desk. It connects Mac and Windows machines over the same Wi‑Fi or wired network. Anything you copy on one machine — a link, a color code, a screenshot, or a file — becomes available on the other within moments, ready to paste. History is kept on both machines, and all data stays on your own network. There is no account, no cloud, and nothing goes to the internet. LanPaste runs quietly in the menu bar / system tray until you need it.
 
+![The LanPaste overlay: a search field over a history list of links, colors, images, text, and files, with a preview pane on the right](docs/assets/product-preview.png)
+
 ## Features
 
 - **No learning curve.** Copy and paste exactly as you always do; LanPaste simply makes the content available on your other machines.
