@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/pair/request", post(pair_request))
         .route("/pair/confirm", post(pair_confirm))
         .route("/pair/revoke", post(pair_revoke))
+        .route("/session/unlock", post(session_unlock))
         .route("/files/{id}", get(get_file))
         .merge(
             Router::new()
@@ -238,6 +239,63 @@ async fn pair_revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn session_unlock(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let auth = auth_paired(&state, &headers, &body)?;
+    if !state.inner.secure_mode {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let parsed: super::protocol::SessionUnlock = serde_json::from_slice(&body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "session_code_invalid".into()))?;
+    let result = {
+        let mut book = state
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        book.unlock(&auth.instance_id, &parsed.code, now_ms())
+    };
+    match result {
+        Ok(()) => {
+            super::refresh_session_show(&state);
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(err) => Err((StatusCode::BAD_REQUEST, err.as_str().into())),
+    }
+}
+
+/// When secure mode is on, a paired signature is not enough. The peer must
+/// have entered the one-time code shown on this machine for the current
+/// online session. Strangers never reach this function: `auth_paired` runs first.
+fn enforce_session(
+    state: &AppState,
+    instance_id: &str,
+    device_name: &str,
+) -> Result<(), (StatusCode, String)> {
+    if !state.inner.secure_mode {
+        return Ok(());
+    }
+    let gate = {
+        let mut book = state
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        book.authorize(instance_id, device_name, now_ms())
+    };
+    if gate.minted.is_some() {
+        super::refresh_session_show(state);
+    }
+    if gate.open {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "session_locked".into()))
+    }
+}
+
 async fn sync_entry(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -251,6 +309,7 @@ async fn sync_entry(
     if !device.allow_receive {
         return Err((StatusCode::FORBIDDEN, "rejected".into()));
     }
+    enforce_session(&state, &auth.instance_id, &device.name)?;
 
     let parsed: SyncEntryBody =
         serde_json::from_slice(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -448,7 +507,12 @@ async fn get_file_inner(
     headers: &HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     let body: &[u8] = b"";
-    let _auth = auth_paired(state, headers, body)?;
+    let auth = auth_paired(state, headers, body)?;
+    let device = state
+        .with_store(|s| s.get_device(&auth.instance_id))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or((StatusCode::UNAUTHORIZED, "device_removed".into()))?;
+    enforce_session(state, &auth.instance_id, &device.name)?;
     let token = query.get("token").cloned();
 
     let item = state

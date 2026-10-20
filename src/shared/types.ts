@@ -68,6 +68,22 @@ export interface PairingInputPayload {
   deviceName: string;
 }
 
+export interface SessionCodeItem {
+  instanceId: string;
+  deviceName: string;
+  code: string;
+  expiresAt: number;
+}
+
+export interface SessionShowPayload {
+  items: SessionCodeItem[];
+}
+
+export interface SessionInputPayload {
+  instanceId: string;
+  deviceName: string;
+}
+
 export interface TransferProgressPayload {
   id: string;
   received: number;

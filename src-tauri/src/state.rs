@@ -10,10 +10,19 @@ use crate::crypto::Identity;
 use crate::device::NearbyInfo;
 use crate::i18n::TrayMenu;
 use crate::store::Store;
-use crate::types::{AppSettings, PairingInputPayload, PairingShowPayload};
+use crate::net::session::SessionBook;
+use crate::types::{
+    AppSettings, PairingInputPayload, PairingShowPayload, SessionInputPayload, SessionShowPayload,
+};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-const GLASS_WINDOWS: &[&str] = &["overlay", "pairing-show", "pairing-input"];
+const GLASS_WINDOWS: &[&str] = &[
+    "overlay",
+    "pairing-show",
+    "pairing-input",
+    "session-show",
+    "session-input",
+];
 #[cfg(target_os = "macos")]
 const GLASS_RADIUS: f64 = 12.0;
 #[cfg(target_os = "windows")]
@@ -46,6 +55,18 @@ pub struct Inner {
     pub last_pairing_input: Mutex<Option<PairingInputPayload>>,
     pub overlay_blur_hide_at: Mutex<Option<Instant>>,
     pub tray: Mutex<Option<TrayMenu>>,
+    /// Process-lifetime switch from `--secure`. Never persisted.
+    pub secure_mode: bool,
+    pub sessions: Mutex<SessionBook>,
+    /// Peer id → earliest time the background flusher may open the code window
+    /// again. Set when the user dismisses the window, so a 3s retry does not
+    /// steal focus. A manual send or paste removes the entry.
+    pub session_prompted: Mutex<HashMap<String, i64>>,
+    /// `"{device_id}\\n{pasteboard_id}"` → send even when the item is over the
+    /// auto-sync cap. Manual sends wait here until the session code succeeds.
+    pub session_retries: Mutex<HashMap<String, bool>>,
+    pub last_session_show: Mutex<Option<SessionShowPayload>>,
+    pub last_session_input: Mutex<Option<SessionInputPayload>>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,4 +234,42 @@ pub fn show_pairing_input(app: &AppHandle, payload: &PairingInputPayload) {
         }
     }
     show_then_emit(app, "pairing-input", "pairing-input", payload.clone());
+}
+
+pub fn show_session_codes(app: &AppHandle, payload: &SessionShowPayload) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut g) = state.inner.last_session_show.lock() {
+            *g = Some(payload.clone());
+        }
+    }
+    show_then_emit(app, "session-show", "session-show", payload.clone());
+}
+
+pub fn hide_session_show(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut g) = state.inner.last_session_show.lock() {
+            *g = None;
+        }
+    }
+    let _ = hide_window(app, "session-show");
+    let _ = app.emit("session-show-hide", ());
+}
+
+pub fn show_session_input(app: &AppHandle, payload: &SessionInputPayload) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut g) = state.inner.last_session_input.lock() {
+            *g = Some(payload.clone());
+        }
+    }
+    show_then_emit(app, "session-input", "session-input", payload.clone());
+}
+
+pub fn hide_session_input(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut g) = state.inner.last_session_input.lock() {
+            *g = None;
+        }
+    }
+    let _ = hide_window(app, "session-input");
+    let _ = app.emit("session-input-hide", ());
 }

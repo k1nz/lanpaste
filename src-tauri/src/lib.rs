@@ -18,7 +18,18 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent};
 
+use crate::net::session::SessionBook;
 use crate::state::{AppState, Inner};
+
+/// `--secure` is a process flag. It is not stored, so the next launch without
+/// it returns to the normal paired-device sync.
+pub fn secure_mode_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|arg| arg.as_ref() == "--secure")
+}
 
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -42,6 +53,8 @@ pub fn run() {
             ipc::start_pair,
             ipc::submit_pair_token,
             ipc::cancel_pair,
+            ipc::submit_session_code,
+            ipc::cancel_session,
             ipc::update_device_note,
             ipc::update_device_flags,
             ipc::remove_device,
@@ -73,6 +86,12 @@ pub fn run() {
             let store = store::Store::open(&data_dir)?;
             let settings = store.load_settings()?;
             let device_name = device::local_device_name();
+            let secure_mode = secure_mode_requested(std::env::args());
+            if secure_mode {
+                eprintln!(
+                    "lanpaste: secure mode on; a paired device must enter a session code before sync or file download"
+                );
+            }
 
             let state = AppState {
                 inner: Arc::new(Inner {
@@ -97,6 +116,12 @@ pub fn run() {
                     last_pairing_input: Mutex::new(None),
                     overlay_blur_hide_at: Mutex::new(None),
                     tray: Mutex::new(None),
+                    secure_mode,
+                    sessions: Mutex::new(SessionBook::new()),
+                    session_prompted: Mutex::new(HashMap::new()),
+                    session_retries: Mutex::new(HashMap::new()),
+                    last_session_show: Mutex::new(None),
+                    last_session_input: Mutex::new(None),
                 }),
             };
             app.manage(state.clone());
@@ -313,4 +338,20 @@ fn fulfill_file_blocking(state: &AppState, id: &str) -> Result<std::path::PathBu
     });
     rx.recv_timeout(Duration::from_secs(60))
         .map_err(|_| "获取文件超时".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secure_mode_requested;
+
+    #[test]
+    fn secure_flag_is_opt_in() {
+        assert!(!secure_mode_requested(["lanpaste"]));
+        assert!(!secure_mode_requested(["lanpaste", "--secure-mode"]));
+        assert!(secure_mode_requested(["lanpaste", "--secure"]));
+        assert!(secure_mode_requested(vec![
+            "lanpaste".to_string(),
+            "--secure".to_string(),
+        ]));
+    }
 }

@@ -3,9 +3,14 @@ pub mod mdns;
 pub mod pair;
 pub mod protocol;
 pub mod server;
+pub mod session;
 pub mod sync;
 
-use crate::state::AppState;
+use std::collections::HashSet;
+
+use crate::state::{self, AppState};
+use crate::store::now_ms;
+use crate::types::{SessionCodeItem, SessionInputPayload, SessionShowPayload};
 
 pub use sync::{auto_sync_new_entry, download_file, flush_pending, sync_entry_to_device};
 
@@ -27,9 +32,187 @@ pub async fn start_network(state: AppState) -> Result<u16, String> {
         loop {
             tick.tick().await;
             flush_pending(&flusher).await;
+            expire_session_grants(&flusher);
         }
     });
     Ok(port)
+}
+
+pub fn refresh_session_show(state: &AppState) {
+    let items = state
+        .inner
+        .sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .pending(now_ms())
+        .into_iter()
+        .map(|code| SessionCodeItem {
+            instance_id: code.instance_id,
+            device_name: code.device_name,
+            code: code.code,
+            expires_at: code.expires_at,
+        })
+        .collect::<Vec<_>>();
+    let Ok(handle) = state.handle() else {
+        return;
+    };
+    if items.is_empty() {
+        state::hide_session_show(&handle);
+    } else {
+        state::show_session_codes(&handle, &SessionShowPayload { items });
+    }
+}
+
+pub fn expire_session_grants(state: &AppState) {
+    if !state.inner.secure_mode {
+        return;
+    }
+    let online = state
+        .inner
+        .nearby
+        .lock()
+        .map(|nearby| nearby.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let changed = state
+        .inner
+        .sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .expire_offline(now_ms(), &online);
+    if changed {
+        refresh_session_show(state);
+    }
+}
+
+/// How long a dismissed code window stays quiet before auto-sync may show it
+/// again. Short enough that a rotated code is still usable, long enough that
+/// the 3s flusher does not steal focus.
+const SESSION_PROMPT_SUPPRESS_MS: i64 = 60_000;
+
+/// Open the code entry window for a peer that was refused with `session_locked`.
+/// Auto-sync passes `force = false` so an open or just-dismissed window is left
+/// alone. A manual send or file paste passes `force = true`.
+pub fn note_remote_session_locked(
+    state: &AppState,
+    instance_id: &str,
+    device_name: &str,
+    force: bool,
+) {
+    if !force {
+        let input_open = state
+            .inner
+            .last_session_input
+            .lock()
+            .ok()
+            .is_some_and(|slot| slot.is_some());
+        if input_open {
+            // Another device is being typed, or this device's window is already up.
+            return;
+        }
+        let now = now_ms();
+        let suppressed = state
+            .inner
+            .session_prompted
+            .lock()
+            .ok()
+            .is_some_and(|prompted| prompted.get(instance_id).is_some_and(|until| now < *until));
+        if suppressed {
+            return;
+        }
+    }
+    let Ok(handle) = state.handle() else {
+        return;
+    };
+    state::show_session_input(
+        &handle,
+        &SessionInputPayload {
+            instance_id: instance_id.to_string(),
+            device_name: device_name.to_string(),
+        },
+    );
+}
+
+pub fn suppress_session_prompt(state: &AppState, instance_id: &str) {
+    if let Ok(mut prompted) = state.inner.session_prompted.lock() {
+        prompted.insert(
+            instance_id.to_string(),
+            now_ms().saturating_add(SESSION_PROMPT_SUPPRESS_MS),
+        );
+    }
+}
+
+pub fn clear_session_prompt(state: &AppState, instance_id: &str) {
+    if let Ok(mut prompted) = state.inner.session_prompted.lock() {
+        prompted.remove(instance_id);
+    }
+}
+
+pub async fn submit_session_code(
+    state: &AppState,
+    instance_id: &str,
+    code: &str,
+) -> Result<(), String> {
+    let device = state
+        .with_store(|s| s.get_device(instance_id))?
+        .ok_or_else(|| "device_removed".to_string())?;
+    let nearby = state
+        .inner
+        .nearby
+        .lock()
+        .ok()
+        .and_then(|n| n.get(instance_id).cloned());
+    let host = nearby
+        .as_ref()
+        .map(|n| n.host.clone())
+        .or(device.host.clone())
+        .ok_or_else(|| "offline".to_string())?;
+    let port = nearby
+        .map(|n| n.port)
+        .or(device.port)
+        .ok_or_else(|| "offline".to_string())?;
+    let pin = client::pin_from_device(&device)?;
+    let http = client::http_client(Some(pin))?;
+    let body = protocol::SessionUnlock {
+        code: session::normalize_code(code),
+    };
+    if body.code.len() != session::CODE_LEN {
+        return Err("session_code_invalid".into());
+    }
+    let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
+    let url = client::host_url(&host, port, "/session/unlock");
+    let mut req = http.post(url);
+    for (k, v) in client::signed_headers(&state.inner.identity, &bytes) {
+        req = req.header(k, v);
+    }
+    let resp = req
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|_| "offline".to_string())?;
+    if !resp.status().is_success() {
+        let t = resp.text().await.unwrap_or_default();
+        let t = t.trim();
+        return Err(if t.is_empty() {
+            "session_code_invalid".into()
+        } else {
+            t.to_string()
+        });
+    }
+    clear_session_prompt(state, instance_id);
+    if let Ok(handle) = state.handle() {
+        let close = state
+            .inner
+            .last_session_input
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|p| p.instance_id == instance_id))
+            .unwrap_or(true);
+        if close {
+            state::hide_session_input(&handle);
+        }
+    }
+    sync::retry_unlocked_sync(state, instance_id).await;
+    Ok(())
 }
 
 pub async fn start_pair_request(state: &AppState, instance_id: &str) -> Result<(), String> {

@@ -77,6 +77,8 @@ pub fn apply_native_ui(app: &AppHandle, locale: LocaleId) {
     set_title(app, "settings", &t(locale, "window.settings"));
     set_title(app, "pairing-show", &t(locale, "window.pairingShow"));
     set_title(app, "pairing-input", &t(locale, "window.pairingInput"));
+    set_title(app, "session-show", &t(locale, "window.sessionShow"));
+    set_title(app, "session-input", &t(locale, "window.sessionInput"));
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(g) = state.inner.tray.lock() {
             if let Some(tray) = g.as_ref() {

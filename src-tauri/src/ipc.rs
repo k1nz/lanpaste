@@ -117,7 +117,8 @@ pub fn copy_entry_to_clipboard(state: State<AppState>, id: String) -> Result<(),
 /// `deviceId` is the paired device `instanceId`.
 #[tauri::command]
 pub async fn sync_to(state: State<'_, AppState>, id: String, device_id: String) -> Result<(), String> {
-    net::sync_entry_to_device(&state, &id, &device_id, true).await
+    net::clear_session_prompt(&state, &device_id);
+    net::sync_entry_to_device(&state, &id, &device_id, true, true).await
 }
 
 #[tauri::command]
@@ -194,6 +195,30 @@ pub async fn submit_pair_token(
     token: String,
 ) -> Result<(), String> {
     net::submit_token(&state, &instance_id, &token).await
+}
+
+#[tauri::command]
+pub async fn submit_session_code(
+    state: State<'_, AppState>,
+    instance_id: String,
+    code: String,
+) -> Result<(), String> {
+    net::submit_session_code(&state, &instance_id, &code).await
+}
+
+#[tauri::command]
+pub fn cancel_session(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let instance_id = state
+        .inner
+        .last_session_input
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|payload| payload.instance_id.clone()));
+    if let Some(instance_id) = instance_id {
+        net::suppress_session_prompt(&state, &instance_id);
+    }
+    state::hide_session_input(&app);
+    Ok(())
 }
 
 #[tauri::command]

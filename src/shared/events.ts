@@ -1,6 +1,12 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { PairingInputPayload, PairingShowPayload, TransferProgressPayload } from "./types";
+import type {
+  PairingInputPayload,
+  PairingShowPayload,
+  SessionInputPayload,
+  SessionShowPayload,
+  TransferProgressPayload,
+} from "./types";
 
 export async function onEvent<T>(
   name: string,
@@ -33,6 +39,22 @@ export function onPairingHide(handler: () => void) {
 
 export function onPairingInput(handler: (payload: PairingInputPayload) => void) {
   return onEvent<PairingInputPayload>("pairing-input", handler);
+}
+
+export function onSessionShow(handler: (payload: SessionShowPayload) => void) {
+  return onEvent<SessionShowPayload>("session-show", handler);
+}
+
+export function onSessionShowHide(handler: () => void) {
+  return onEvent<unknown>("session-show-hide", () => handler());
+}
+
+export function onSessionInput(handler: (payload: SessionInputPayload) => void) {
+  return onEvent<SessionInputPayload>("session-input", handler);
+}
+
+export function onSessionInputHide(handler: () => void) {
+  return onEvent<unknown>("session-input-hide", () => handler());
 }
 
 export function onTransferProgress(handler: (payload: TransferProgressPayload) => void) {

@@ -18,6 +18,12 @@ async function resolveRoot(): Promise<Component> {
   if (windowName === "pairing-input") {
     return (await import("./pairing/PairingInputApp.vue")).default;
   }
+  if (windowName === "session-show") {
+    return (await import("./session/SessionShowApp.vue")).default;
+  }
+  if (windowName === "session-input") {
+    return (await import("./session/SessionInputApp.vue")).default;
+  }
   return OverlayApp;
 }
 

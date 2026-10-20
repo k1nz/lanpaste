@@ -75,6 +75,22 @@ Pairing relies on a short code shown on the other screen. Anyone who can see tha
 
 The application is intended for networks you trust, such as home or office networks. A public café Wi‑Fi is not a suitable environment. LanPaste does not sync over the internet, and there is currently no Linux build.
 
+## Security mode
+
+By default, paired devices stay trusted and clipboard items sync on their own.
+
+Pass `--secure` at launch when a paired device should ask again each time it comes online. This machine then shows an 8-digit code before it will accept sync or file download from that device. The code is kept in memory only. It expires when the other computer leaves the network for about 45 seconds, or when this app quits. The next launch without the flag behaves as before.
+
+```bash
+# Installed app
+LanPaste --secure
+
+# From a checkout
+npx tauri dev -- --secure
+```
+
+Only the receiving computer needs the flag. The computer where you type the code does not. If both are started with `--secure`, each direction asks once.
+
 ## Building from source
 
 To compile it yourself:

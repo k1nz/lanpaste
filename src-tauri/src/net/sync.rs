@@ -34,6 +34,12 @@ pub fn is_retryable_sync_error(err: &str) -> bool {
     )
 }
 
+/// `session_locked` stays queued, but it must not spend the attempt budget.
+/// The send is waiting for a person to type the code, not failing.
+pub fn spends_sync_attempt(err: &str) -> bool {
+    err != "session_locked"
+}
+
 /// After a failed attempt (now `attempts_after` attempts), should the queued
 /// row stay for another try? Permanent failures are dropped immediately;
 /// retryable ones are dropped once the bounded attempt budget is spent.
@@ -181,6 +187,10 @@ pub async fn post_sync(state: &AppState, device: &StoredDevice, body: &SyncEntry
         return Err("device_removed".into());
     }
     if status.as_u16() == 403 {
+        let t = resp.text().await.unwrap_or_default();
+        if t.trim() == "session_locked" {
+            return Err("session_locked".into());
+        }
         return Err("rejected".into());
     }
     if status.as_u16() == 413 {
@@ -217,6 +227,7 @@ pub async fn sync_entry_to_device(
     pasteboard_id: &str,
     device_id: &str,
     ignore_cap: bool,
+    force_session_prompt: bool,
 ) -> Result<(), String> {
     let settings = state
         .inner
@@ -290,15 +301,103 @@ pub async fn sync_entry_to_device(
     match post_sync(state, &device, &body).await {
         Ok(()) => {
             let _ = state.with_store(|s| s.dequeue_sync(pasteboard_id, device_id));
+            clear_session_retry(state, pasteboard_id, device_id);
             Ok(())
         }
         Err(e) => {
+            if e == "session_locked" {
+                remember_session_retry(state, pasteboard_id, device_id, ignore_cap);
+                let _ = state.with_store(|s| s.enqueue_sync(pasteboard_id, device_id));
+                super::note_remote_session_locked(
+                    state,
+                    device_id,
+                    &device.name,
+                    force_session_prompt,
+                );
+            }
             if e == "trust_broken" {
                 let _ = state.with_store(|s| s.mark_trust_broken(device_id));
                 state.emit_devices();
             }
             Err(e)
         }
+    }
+}
+
+fn session_retry_key(device_id: &str, pasteboard_id: &str) -> String {
+    format!("{device_id}\n{pasteboard_id}")
+}
+
+fn remember_session_retry(
+    state: &AppState,
+    pasteboard_id: &str,
+    device_id: &str,
+    ignore_cap: bool,
+) {
+    let Ok(mut retries) = state.inner.session_retries.lock() else {
+        return;
+    };
+    let entry = retries
+        .entry(session_retry_key(device_id, pasteboard_id))
+        .or_insert(false);
+    if ignore_cap {
+        *entry = true;
+    }
+}
+
+fn session_retry_ignores_cap(state: &AppState, pasteboard_id: &str, device_id: &str) -> bool {
+    state
+        .inner
+        .session_retries
+        .lock()
+        .ok()
+        .and_then(|retries| {
+            retries
+                .get(&session_retry_key(device_id, pasteboard_id))
+                .copied()
+        })
+        .unwrap_or(false)
+}
+
+fn clear_session_retry(state: &AppState, pasteboard_id: &str, device_id: &str) {
+    if let Ok(mut retries) = state.inner.session_retries.lock() {
+        retries.remove(&session_retry_key(device_id, pasteboard_id));
+    }
+}
+
+/// After a session code is accepted, send anything that was waiting on it.
+pub async fn retry_unlocked_sync(state: &AppState, device_id: &str) {
+    let memory: Vec<(String, bool)> = state
+        .inner
+        .session_retries
+        .lock()
+        .map(|retries| {
+            retries
+                .iter()
+                .filter_map(|(key, ignore_cap)| {
+                    let (dev, pasteboard_id) = key.split_once('\n')?;
+                    if dev != device_id {
+                        return None;
+                    }
+                    Some((pasteboard_id.to_string(), *ignore_cap))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut sent = std::collections::HashSet::new();
+    for (pasteboard_id, ignore_cap) in memory {
+        sent.insert(pasteboard_id.clone());
+        let _ = sync_entry_to_device(state, &pasteboard_id, device_id, ignore_cap, false).await;
+    }
+    let pending = match state.with_store(|s| s.list_pending_sync()) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    for entry in pending {
+        if entry.device_id != device_id || sent.contains(&entry.pasteboard_id) {
+            continue;
+        }
+        let _ = sync_entry_to_device(state, &entry.pasteboard_id, device_id, false, false).await;
     }
 }
 
@@ -335,7 +434,7 @@ pub async fn auto_sync_new_entry(state: &AppState, pasteboard_id: &str) -> Resul
             let _ = state.with_store(|s| s.enqueue_sync(pasteboard_id, &d.instance_id));
             continue;
         }
-        match sync_entry_to_device(state, pasteboard_id, &d.instance_id, false).await {
+        match sync_entry_to_device(state, pasteboard_id, &d.instance_id, false, false).await {
             Ok(()) => {}
             Err(e) if is_retryable_sync_error(&e) => {
                 // Reachable but the send did not land: keep it for retry instead
@@ -406,12 +505,23 @@ pub async fn flush_pending(state: &AppState) {
         // The cap may have been lowered since the row was queued. That is a
         // permanent condition for this entry, so evict it rather than retrying
         // it every tick forever.
-        if !should_auto_sync(pb.total_bytes, cap) {
+        let ignore_cap =
+            session_retry_ignores_cap(state, &entry.pasteboard_id, &entry.device_id);
+        if !ignore_cap && !should_auto_sync(pb.total_bytes, cap) {
             drop_pending(state, &entry, "payload_too_large");
             continue;
         }
-        match sync_entry_to_device(state, &entry.pasteboard_id, &entry.device_id, false).await {
+        match sync_entry_to_device(
+            state,
+            &entry.pasteboard_id,
+            &entry.device_id,
+            ignore_cap,
+            false,
+        )
+        .await
+        {
             Ok(()) => {}
+            Err(e) if !spends_sync_attempt(&e) => {}
             Err(e) if is_retryable_sync_error(&e) => {
                 let attempts = state
                     .with_store(|s| {
@@ -534,6 +644,12 @@ pub async fn download_file(state: &AppState, pasteboard_id: &str) -> Result<(), 
         let code = status.as_u16();
         let server_error = status.is_server_error();
         let t = resp.text().await.unwrap_or_default();
+        if t.trim() == "session_locked" {
+            let _ = state.with_store(|s| s.update_download_state(pasteboard_id, "idle", true));
+            state.emit_history();
+            super::note_remote_session_locked(state, &device.instance_id, &device.name, true);
+            return Err("session_locked".into());
+        }
         let err = if code == 401 || t.contains("device_removed") {
             "device_removed"
         } else if code == 403 || t.contains("rejected") {
@@ -906,9 +1022,16 @@ mod tests {
         for permanent in ["rejected", "payload_too_large", "device_removed", "trust_broken"] {
             assert!(!is_retryable_sync_error(permanent), "{permanent}");
         }
-        for transient in ["offline", "timeout", "connection reset"] {
+        for transient in ["offline", "timeout", "connection reset", "session_locked"] {
             assert!(is_retryable_sync_error(transient), "{transient}");
         }
+    }
+
+    #[test]
+    fn session_lock_does_not_spend_the_attempt_budget() {
+        assert!(!spends_sync_attempt("session_locked"));
+        assert!(spends_sync_attempt("offline"));
+        assert!(spends_sync_attempt("rejected"));
     }
 
     #[test]

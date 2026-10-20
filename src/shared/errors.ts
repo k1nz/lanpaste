@@ -1,6 +1,10 @@
 import { t, type MsgKey } from "./i18n";
 
 const RULES: Array<{ test: RegExp; key: MsgKey }> = [
+  { test: /session_locked_out/, key: "err.sessionLockedOut" },
+  { test: /session_code_expired/, key: "err.sessionExpired" },
+  { test: /session_code_invalid/, key: "err.sessionInvalid" },
+  { test: /session_locked/, key: "err.sessionLocked" },
   { test: /expired|已过期/i, key: "err.tokenExpired" },
   { test: /pair_mismatch|配对信息不一致/i, key: "err.pairMismatch" },
   { test: /token|配对码不正确/i, key: "err.tokenInvalid" },

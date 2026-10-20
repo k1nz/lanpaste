@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for all LanPaste windows",
-  "windows": ["overlay", "settings", "pairing-show", "pairing-input"],
+  "windows": ["overlay", "settings", "pairing-show", "pairing-input", "session-show", "session-input"],
   "permissions": [
     "core:default",
     "core:window:allow-show",

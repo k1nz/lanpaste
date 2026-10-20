@@ -131,6 +131,14 @@ export function cancelPair() {
   return invokeResult("cancel_pair");
 }
 
+export function submitSessionCode(instanceId: string, code: string) {
+  return invokeResult("submit_session_code", { instanceId, code });
+}
+
+export function cancelSession() {
+  return invokeResult("cancel_session");
+}
+
 export function updateDeviceNote(instanceId: string, note: string) {
   return invokeResult("update_device_note", { instanceId, note });
 }

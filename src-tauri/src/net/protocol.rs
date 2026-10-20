@@ -43,6 +43,12 @@ pub struct PairRevoke {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionUnlock {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncEntryBody {
     pub id: String,
     pub copied_at: i64,

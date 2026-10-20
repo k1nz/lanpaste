@@ -33,6 +33,15 @@ describe("localizeError", () => {
     expect(localizeError("token_invalid")).toBe(t("err.tokenInvalid"));
   });
 
+  it("maps session codes without falling through to the pairing messages", () => {
+    expect(localizeError("session_locked")).toBe(t("err.sessionLocked"));
+    expect(localizeError("session_code_invalid")).toBe(t("err.sessionInvalid"));
+    expect(localizeError("session_code_expired")).toBe(t("err.sessionExpired"));
+    expect(localizeError("session_code_expired")).not.toBe(t("err.tokenExpired"));
+    expect(localizeError("session_locked_out")).toBe(t("err.sessionLockedOut"));
+    expect(localizeError("session_locked_out")).not.toBe(t("err.sessionLocked"));
+  });
+
   it("falls back to the generic message for anything unrecognised", () => {
     expect(localizeError("")).toBe(t("err.generic"));
     expect(localizeError(null)).toBe(t("err.generic"));

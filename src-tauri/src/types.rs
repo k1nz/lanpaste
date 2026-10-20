@@ -201,6 +201,28 @@ pub struct PairingInputPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionCodeItem {
+    pub instance_id: String,
+    pub device_name: String,
+    pub code: String,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionShowPayload {
+    pub items: Vec<SessionCodeItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInputPayload {
+    pub instance_id: String,
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferProgressPayload {
     pub id: String,
     pub received: u64,
